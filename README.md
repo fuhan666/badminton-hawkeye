@@ -68,6 +68,18 @@ npm test        # Vitest 单次运行，覆盖几何、判定、方向与微调�
 npm run preview # 预览构建产物
 ```
 
+## 导出验证（开发工具）
+
+`tools/mp4-probe` 用固定回放输入验证「逐帧渲染 → WebCodecs H.264 → MP4 封装 → 浏览器播放」，用于确定导出的编码参数与封装库，不是正式导出功能（应用内导出仍未接入）。
+
+```bash
+npm run probe -- --browser chrome   # 也可用 --browser edge
+```
+
+脚本会自己起 Vite 与无头浏览器，跑完把产物写到 `tools/mp4-probe/out/`（已被 git 忽略）：`sample.mp4`、`contact-3.2s.png`、`result-4.6s.png` 和 `report.json`。运行需要本机安装 Chrome 或 Edge，默认端口 5199，可用 `--port` 改。单独做类型检查用 `npm run probe:typecheck`。
+
+实测参数、封装选型与许可证说明见 `docs/TECHNICAL_DESIGN.md` 的「视频导出」一节。
+
 ## 目录
 
 ```
@@ -76,6 +88,7 @@ src/components/  球场几何、可交互的 SVG 视图、三维预览与播放�
 src/replay/      Three.js 场景：球场、球网、球体、印记与结果牌
 src/App.tsx      布局、赛制与编辑目标切换、判定和入口门控
 docs/            产品需求、技术方案、交付计划
+tools/mp4-probe/ 导出技术验证：逐帧渲染、H.264 编码、MP4 封装与播放验证
 ```
 
 ## 判定口径

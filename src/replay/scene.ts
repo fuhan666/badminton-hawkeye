@@ -207,14 +207,25 @@ function createPlateTexture(text: 'IN' | 'OUT'): THREE.CanvasTexture {
   return texture
 }
 
-export function createReplayScene(canvas: HTMLCanvasElement): ReplayScene {
+export interface ReplaySceneOptions {
+  /**
+   * 渲染像素比。预览不传时取设备 DPR 且不超过 2；
+   * 导出固定分辨率时传 1，保证画布像素与目标尺寸一致。
+   */
+  pixelRatio?: number
+}
+
+export function createReplayScene(
+  canvas: HTMLCanvasElement,
+  options: ReplaySceneOptions = {},
+): ReplayScene {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
     alpha: false,
     powerPreference: 'high-performance',
   })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+  renderer.setPixelRatio(options.pixelRatio ?? Math.min(window.devicePixelRatio || 1, 2))
   renderer.setClearColor(BACKGROUND_COLOR, 1)
   renderer.outputColorSpace = THREE.SRGBColorSpace
 

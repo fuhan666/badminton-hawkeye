@@ -141,9 +141,61 @@ interface ReplayFrame {
 
 ## 视频导出
 
-先用最小回放验证目标浏览器的 WebCodecs 编码和 MP4 封装。封装库按维护情况、许可证和接入成本选择。
+### 封装选型
+
+| 库 | 版本 | 许可证 | 维护状态 | 解包体积 |
+| --- | --- | --- | --- | --- |
+| Mediabunny | 1.66.0 | MPL-2.0 | 活跃（2026-11-13 更新） | 11,874,123 B |
+| mp4box | 2.5.0 | BSD-3-Clause | 活跃（2026-10-25 更新） | 2,485,275 B |
+| mp4-muxer | 5.2.2 | MIT | 已弃用，官方指向 Mediabunny（2025-07-02 后无更新） | 155,878 B |
+
+选定 **Mediabunny 1.66.0**，只用它的 MP4 封装能力（`Output`、`Mp4OutputFormat`、`BufferTarget`、`EncodedVideoPacketSource`、`EncodedPacket`），视频编码直接调原生 `VideoEncoder`，便于拿到真实配置和错误。mp4box 的 BSD 许可更宽松，但要自己拼 AVC track 与 sample 描述，接入成本明显更高；mp4-muxer 接入最简单，但已被官方弃用，不适合作为新代码的基础。
+
+MPL-2.0 是文件级弱 copyleft：本项目只通过 npm 引用未修改的包，不修改其源码，因此不要求本项目整体改用 MPL，项目自身的开源许可证仍由项目所有者决定。分发时保留该依赖的许可证声明与来源即可。体积一栏是 npm 解包大小，不代表浏览器产物。
+
+只导入上述五个导出的实际体积为 **129,305 B（minified）/ 34,782 B（gzip）**，测量方式：`esbuild --bundle --minify --format=esm --target=es2022` 打包一个仅导入这五个符号的入口。该依赖装在 `devDependencies`，只有验证工具引用，生产构建入口仍只有 `index.html`，正式页面不会带上它。
+
+### 编码参数
+
+固定 1920×1080 / 30 fps / 5 s / 150 帧 / 无音轨，与 PRD 建议一致：
+
+- 编码 `avc1.420028`（H.264 Baseline，Level 4.0），码率 8 Mbps，`avc: { format: 'avc' }`，每 30 帧一个关键帧（共 5 个）。
+- 采样 `t = 帧序号 / 帧率`，只编 `i = 0…149`，不再编 `t = 5 s` 的第 151 帧；第 `i` 帧 `timestamp = round(i × 10⁶ / 30)`，`duration` 取相邻边界之差，首帧 0 µs、末帧结束 5,000,000 µs。
+- 画布渲染像素比固定为 1（`createReplayScene(canvas, { pixelRatio: 1 })`），否则设备 DPR 会把画布放大成非目标尺寸。
+
+### 实现要点
+
+`render` 之后立刻用同一 canvas 构造 `VideoFrame`，避免绘制缓冲被清空；编码回调里把 `EncodedVideoChunk` 转成 `EncodedPacket` 后按序串行 `await source.add(packet, meta)`，首包必须带编码器给的 `decoderConfig`，否则 MP4 缺 `avcC`；`encoder.flush()` 只保证编码结束，之后还要等写入链完成，再 `source.close()` 与 `output.finalize()`；编码错误与封装错误分别记录并冒泡，不能只等 flush 就判定成功；`encodeQueueSize` 超过 8 时等 `dequeue` 事件做背压。
+
+### 实测结果
+
+验证工具在 `tools/mp4-probe`，命令见 README。固定双打输入：落点 `(3.055, 3.2)`、来向点 `(3.055, 0)`，即单位方向 `(0, 1)`。
+
+| 项目 | 结果 |
+| --- | --- |
+| 分辨率 | 1920×1080 |
+| 帧率 | 30 fps（ffprobe `avg_frame_rate = 30/1`） |
+| 帧数 | 150 |
+| 时长 | 5.000 s（时间戳 0 → 5,000,000 µs） |
+| 文件大小 | 1,815,323 B |
+| 轨道 | 仅一条视频轨，H.264 Baseline，无音轨 |
+| 渲染 + 编码耗时 | 914 ms（Chrome）/ 901 ms（Edge） |
+| 封装耗时 | 3 ms（Chrome）/ 5 ms（Edge） |
+
+播放验证：原生 `<video>` 读回 1920×1080、时长 5.000 s；播放 1.2 s 后 `currentTime = 1.201 s`；跳转到 3.2 s 后 `currentTime = 3.2 s`，该帧与 4.6 s 定格帧均非黑屏，13 mm 印记压在双打边线上、画面下方 IN 结果牌可读。
+
+运行环境（2026-11-16 实测，`--headless=new`，无头模式使用 ANGLE Metal 渲染）：
+
+- macOS（Darwin 27.0.0，Apple M1 Pro），Node 24.13.0。
+- Chrome 157.0.8103.51：`VideoEncoder` / `VideoFrame` / WebGL 均可用，`isConfigSupported` 对 1080p30 `avc1.420028`、`avc1.640028`、`avc1.4d0028` 与 720p30 `avc1.42001f` 全部返回 `true`。
+- Edge 153.0.4234.48：同样全部返回 `true`，并生成相同参数的可播放文件。
+
+失败路径实测：编码字符串不存在时（`avc1.ffffff`）`isConfigSupported` 返回 `supported: false`，不抛异常；HEVC（`hvc1.1.6.L93.B0`）在 Chrome 157 返回 `true`、Edge 153 返回 `false`。因此导出固定使用 H.264，能力判断一律以 `isConfigSupported` 的结果为准，不能按浏览器品牌推断；不支持时提示当前浏览器缺少 H.264 编码能力。
+
+### 导出流程
 
 按 `t = 帧序号 / 帧率` 逐帧渲染与编码。导出时固定输入和分辨率，显示进度并支持取消；完成编码后生成本地下载文件，结束时释放帧与编码资源。不支持当前编码时清楚提示用户。
+
 
 ## 验证与交付
 
