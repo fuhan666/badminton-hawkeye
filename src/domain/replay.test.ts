@@ -223,3 +223,165 @@ describe('时间越界', () => {
     expect(evaluateReplay(CROSS_NET, Number.NaN).time).toBe(0)
   })
 })
+
+/** 把地面点投到画面归一化坐标，用于检查近景构图；与渲染层的针孔相机一致 */
+function projectNdc(
+  camera: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number }; fov: number },
+  point: { x: number; z: number },
+) {
+  const forward = {
+    x: camera.target.x - camera.position.x,
+    y: camera.target.y - camera.position.y,
+    z: camera.target.z - camera.position.z,
+  }
+  const forwardLength = Math.hypot(forward.x, forward.y, forward.z)
+  const f = { x: forward.x / forwardLength, y: forward.y / forwardLength, z: forward.z / forwardLength }
+  const right = { x: f.z, y: 0, z: -f.x }
+  const rightLength = Math.hypot(right.x, right.z)
+  const r = { x: right.x / rightLength, y: 0, z: right.z / rightLength }
+  const up = {
+    x: r.y * f.z - r.z * f.y,
+    y: r.z * f.x - r.x * f.z,
+    z: r.x * f.y - r.y * f.x,
+  }
+  const rel = { x: point.x - camera.position.x, y: -camera.position.y, z: point.z - camera.position.z }
+  const depth = rel.x * f.x + rel.y * f.y + rel.z * f.z
+  const tan = Math.tan((camera.fov * Math.PI) / 360)
+  return {
+    x: (rel.x * r.x + rel.z * r.z) / (depth * tan * (16 / 9)),
+    y: (rel.x * up.x + rel.y * up.y + rel.z * up.z) / (depth * tan),
+  }
+}
+
+const FRAMING_SCENES = [
+  {
+    name: '边线压线',
+    landing: { x: 3.055, z: 3.2 },
+    verdict: 'IN' as const,
+    /** 需要同框的线带采样点：双打边线在 x = 3.03–3.07 */
+    lines: () =>
+      [2.9, 3.05, 3.2].flatMap((z) => [
+        { x: 3.03, z },
+        { x: 3.07, z },
+      ]),
+  },
+  {
+    name: '角落相交',
+    landing: { x: 3.055, z: 6.705 },
+    verdict: 'IN' as const,
+    lines: () => [
+      { x: 3.03, z: 6.6 },
+      { x: 3.03, z: 6.7 },
+      { x: 2.95, z: 6.68 },
+      { x: 2.85, z: 6.68 },
+    ],
+  },
+  {
+    name: '明显界内',
+    landing: { x: 2.2, z: 3.2 },
+    verdict: 'IN' as const,
+    lines: () => [
+      { x: 3.03, z: 3.0 },
+      { x: 3.07, z: 3.2 },
+      { x: 3.03, z: 3.4 },
+    ],
+  },
+  {
+    name: '明显界外',
+    landing: { x: 3.3, z: 3.2 },
+    verdict: 'OUT' as const,
+    lines: () => [
+      { x: 3.03, z: 3.0 },
+      { x: 3.07, z: 3.2 },
+      { x: 3.03, z: 3.4 },
+    ],
+  },
+]
+
+describe('近景构图', () => {
+  for (const scene of FRAMING_SCENES) {
+    it(`${scene.name}：触地与定格都把落点和所需线带收进画面`, () => {
+      const replay = input(scene.landing, { x: scene.landing.x, z: -3.2 })
+      expect(replayVerdict(replay)).toBe(scene.verdict)
+      for (const time of [CONTACT_TIME, REPLAY_DURATION]) {
+        const frame = evaluateReplay(replay, time)
+        const landing = projectNdc(frame.camera, scene.landing)
+        // 落点留在画面中部，不被结果牌或画框裁掉
+        expect(Math.abs(landing.x)).toBeLessThan(0.5)
+        expect(landing.y).toBeGreaterThan(-0.5)
+        expect(landing.y).toBeLessThan(0.4)
+        for (const point of scene.lines()) {
+          const ndc = projectNdc(frame.camera, point)
+          expect(Math.abs(ndc.x)).toBeLessThan(0.98)
+          expect(ndc.y).toBeLessThan(0.98)
+          expect(ndc.y).toBeGreaterThan(-0.95)
+        }
+      }
+    })
+  }
+
+  it('单打只在单打边线处取景，落点判 OUT 时仍能看到最近的有效边界', () => {
+    const replay = input({ x: 2.7, z: 3.2 }, { x: 2.7, z: -3.2 }, 'singles')
+    expect(replayVerdict(replay)).toBe('OUT')
+    const frame = evaluateReplay(replay, REPLAY_DURATION)
+    for (const point of [
+      { x: 2.57, z: 3.0 },
+      { x: 2.61, z: 3.2 },
+      { x: 2.57, z: 3.4 },
+    ]) {
+      const ndc = projectNdc(frame.camera, point)
+      expect(Math.abs(ndc.x)).toBeLessThan(0.98)
+      expect(Math.abs(ndc.y)).toBeLessThan(0.98)
+    }
+  })
+
+  it('镜像落点得到镜像构图，结果仍有限且在地面之上', () => {
+    const cases = [
+      { x: 3.055, z: -3.2 },
+      { x: -3.055, z: 3.2 },
+      { x: -3.055, z: -6.705 },
+      { x: 3.3, z: -3.2 },
+    ]
+    for (const landing of cases) {
+      const replay = input(landing, { x: 0, z: 2.0 })
+      for (const time of [CONTACT_TIME, REPLAY_DURATION]) {
+        const camera = evaluateReplay(replay, time).camera
+        expect(camera.position.y).toBeGreaterThan(0.8)
+        expect(Number.isFinite(camera.position.x + camera.position.z + camera.fov)).toBe(true)
+      }
+    }
+  })
+})
+
+describe('镜头净空', () => {
+  const landings = [
+    { x: 3.055, z: 3.2 },
+    { x: 3.055, z: 6.705 },
+    { x: 2.2, z: 3.2 },
+    { x: 3.3, z: 3.2 },
+    { x: 0.4, z: 2.4 },
+    { x: 0, z: 0.6 },
+    { x: 0, z: 3 },
+    { x: -2.4, z: 5.6 },
+  ]
+
+  it('镜头全程在地面之上，且不穿过球网', () => {
+    for (const landing of landings) {
+      for (const incoming of [
+        { x: landing.x, z: -3.2 },
+        { x: landing.x - 2.6, z: -3.2 },
+        { x: 0, z: 3.2 },
+      ]) {
+        const replay = input(landing, incoming)
+        for (let time = 0; time <= REPLAY_DURATION; time += 0.02) {
+          const p = evaluateReplay(replay, time).camera.position
+          expect(p.y).toBeGreaterThan(0.45)
+          const inNetBand = p.y > 0.6 && p.y < COURT.netPostHeight + 0.06
+          if (inNetBand) {
+            expect(Math.abs(p.z) > 0.3 || Math.abs(p.x) > COURT.doublesHalfWidth + 0.15).toBe(true)
+          }
+        }
+      }
+    }
+  })
+})
