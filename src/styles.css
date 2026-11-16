@@ -479,6 +479,74 @@ h2 {
   color: var(--ink-soft);
 }
 
+.export-bar {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.export-bar--success {
+  border-color: #b7e4d4;
+  background: #f2fbf7;
+}
+
+.export-bar--alert {
+  border-color: #f3c9c9;
+  background: #fdf5f5;
+}
+
+.export-bar--muted {
+  background: #f6f8fa;
+}
+
+.export-bar__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.export-bar__title {
+  font-size: 14px;
+}
+
+.export-bar__percent {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.export-bar__track {
+  height: 8px;
+  border-radius: 999px;
+  background: #e3eaf0;
+  overflow: hidden;
+}
+
+.export-bar__fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.export-bar__message {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+.export-bar__actions {
+  display: flex;
+  gap: 8px;
+}
+
 @media (max-width: 960px) {
   .layout {
     grid-template-columns: minmax(0, 1fr);

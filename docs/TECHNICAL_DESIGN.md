@@ -153,7 +153,9 @@ interface ReplayFrame {
 
 MPL-2.0 是文件级弱 copyleft：本项目只通过 npm 引用未修改的包，不修改其源码，因此不要求本项目整体改用 MPL，项目自身的开源许可证仍由项目所有者决定。分发时保留该依赖的许可证声明与来源即可。体积一栏是 npm 解包大小，不代表浏览器产物。
 
-只导入上述五个导出的实际体积为 **129,305 B（minified）/ 34,782 B（gzip）**，测量方式：`esbuild --bundle --minify --format=esm --target=es2022` 打包一个仅导入这五个符号的入口。该依赖装在 `devDependencies`，只有验证工具引用，生产构建入口仍只有 `index.html`，正式页面不会带上它。
+只导入上述五个导出的实际体积为 **129,305 B（minified）/ 34,782 B（gzip）**，测量方式：`esbuild --bundle --minify --format=esm --target=es2022` 打包一个仅导入这五个符号的入口。
+
+正式导出接入后，`mediabunny` 已从 `devDependencies` 移到运行时 `dependencies`，只导入 `Output`、`Mp4OutputFormat`、`BufferTarget`、`EncodedVideoPacketSource`、`EncodedPacket`。生产入口 JS 由 787,519 B 增至 925,122 B（+137,603 B，+17.5%），gzip 由 212,025 B 增至 250,347 B（+38,322 B，+18.1%）；CSS 由 6,022 B 增至 6,863 B（gzip 1,917 B → 2,094 B）。体积以 `npm run build` 产物为准。
 
 ### 编码参数
 
@@ -194,7 +196,18 @@ MPL-2.0 是文件级弱 copyleft：本项目只通过 npm 引用未修改的包�
 
 ### 导出流程
 
-按 `t = 帧序号 / 帧率` 逐帧渲染与编码。导出时固定输入和分辨率，显示进度并支持取消；完成编码后生成本地下载文件，结束时释放帧与编码资源。不支持当前编码时清楚提示用户。
+实现位于 `src/export/exportReplay.ts`（编码、封装、清理）与 `src/export/useExportJob.ts`（单任务、进度、下载）。
+
+1. 点击导出时复制赛制、落点与单位方向作为快照，之后继续编辑不改变本次视频；同时只允许一个活动任务。
+2. 能力判断：`VideoEncoder` / `VideoFrame` 缺失，或 `isConfigSupported` 对完整 1080p30 配置返回 false / 拒绝，都给出“当前环境不支持视频导出”的可见提示，预览照常。
+3. 独立画布 1920×1080 + `createReplayScene(canvas, { pixelRatio: 1 })`，不抓取预览画布；按 `t = i / 30` 调 `evaluateReplay` 渲染 150 帧。
+4. 每帧构造 `VideoFrame` 后立即编码并关闭；`keyFrame` 取 `i % 30 === 0`。`encodeQueueSize > 8` 时等待 `dequeue` 背压，每 5 帧让出一次事件循环。
+5. 进度按编码回调确认的帧数换算 0–100%，界面区分准备、编码、封装、收尾；封装完成前不宣告成功。
+6. 取消通过 `AbortController` 在每次送帧、背压等待、flush 后、写入链后、finalize 前检查；取消后立即停止送帧，关闭编码器并 `output.cancel()` 丢弃半成品，不建立下载。编码或封装错误同样冒泡，不能被 flush 成功掩盖。
+7. 成功路径：`flush()` → 等写入链 → `source.close()` → `output.finalize()` → 取 `BufferTarget` 生成 Blob → 自动下载带落点与时间戳的文件名；下载 URL 在使用后撤销。
+8. 成功、失败、取消与组件卸载都进入统一清理：关闭 `VideoEncoder`、取消未完成的封装、`scene.dispose()` 并清空画布与缓冲引用。
+
+单元测试在 `src/export/exportReplay.test.ts`，用假后端覆盖帧时间轴、进度换算、输入快照、150 帧送帧与关键帧位置、背压期间取消、取消后重试、编码/封装错误和不支持提示。正式界面路径由 `tools/export-smoke` 在真实浏览器中覆盖成功、取消、重试、OUT 结果与不支持提示。
 
 
 ## 验证与交付

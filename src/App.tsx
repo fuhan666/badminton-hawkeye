@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import CourtView from './components/CourtView'
+import ExportStatusBar from './components/ExportStatusBar'
 import ReplayPreview from './components/ReplayPreview'
 import type { EditTarget } from './components/CourtView'
 import { CONTACT_RADIUS } from './domain/court'
 import type { GroundPoint, MatchFormat } from './domain/court'
 import { MIN_DIRECTION_DISTANCE, buildReplayInput, resolveDirection } from './domain/direction'
 import { isInsideCourt } from './domain/judgement'
+import { useExportJob } from './export/useExportJob'
 
 const FORMATS: { value: MatchFormat; label: string; note: string }[] = [
   { value: 'singles', label: '单打', note: '5.18 m 宽' },
@@ -26,6 +28,7 @@ export default function App() {
   const [replayPlaying, setReplayPlaying] = useState(false)
   const [playSignal, setPlaySignal] = useState(0)
   const [pauseSignal, setPauseSignal] = useState(0)
+  const exportJob = useExportJob()
 
   const inBounds = isInsideCourt(landing, format)
   const direction = resolveDirection(landing, incoming)
@@ -57,8 +60,10 @@ export default function App() {
     setNotice(null)
   }
 
-  function handlePending(feature: string) {
-    setNotice(`${feature}将在下一阶段接入，当前只做输入校验。`)
+  function handleExport() {
+    if (!replayInput || exportJob.active) return
+    setNotice(null)
+    void exportJob.startExport(replayInput)
   }
 
   return (
@@ -96,15 +101,27 @@ export default function App() {
             <button
               type="button"
               className="action action--primary"
-              disabled={!ready}
-              title={ready ? '导出 MP4' : '需要有效的落点与来向方向'}
-              onClick={() => handlePending('视频导出')}
+              disabled={!ready || exportJob.active}
+              title={
+                !ready
+                  ? '需要有效的落点与来向方向'
+                  : exportJob.active
+                    ? '导出进行中，可先取消'
+                    : '导出 1920×1080 / 30 fps / 5 s 的 MP4'
+              }
+              onClick={handleExport}
             >
-              导出视频
+              {exportJob.active ? '导出中…' : '导出视频'}
             </button>
           </div>
         </div>
       </header>
+
+      <ExportStatusBar
+        status={exportJob.status}
+        onCancel={exportJob.cancelExport}
+        onDismiss={exportJob.dismissStatus}
+      />
 
       <main className="layout">
         <section className="panel panel--court">
@@ -282,6 +299,7 @@ export default function App() {
               <li>来向点只决定方向，同方向不同距离得到相同输入。</li>
               <li>两点重合时播放与导出保持禁用，拖开即恢复。</li>
               <li>回放约 5 秒：全景、跟随、慢放触地、印记与结果；可暂停、重播或拖动时间轴。</li>
+              <li>导出按点击时的设置生成 1920×1080 / 30 fps / 5 s 的 MP4，期间可取消；导出中继续编辑不影响本次文件。</li>
               <li>切换单打／双打保留两个点，只更新有效边界与判定。</li>
             </ul>
             {notice ? <p className="tips__notice">{notice}</p> : null}
