@@ -186,7 +186,7 @@ MPL-2.0 是文件级弱 copyleft：本项目只通过 npm 引用未修改的包�
 
 运行环境（2026-11-16 实测，`--headless=new`，无头模式使用 ANGLE Metal 渲染）：
 
-- macOS（Darwin 27.0.0，Apple M1 Pro），Node 24.13.0。
+- macOS 27.0.1（Darwin 27.0.0，Apple M1 Pro），Node 24.13.0。
 - Chrome 157.0.8103.51：`VideoEncoder` / `VideoFrame` / WebGL 均可用，`isConfigSupported` 对 1080p30 `avc1.420028`、`avc1.640028`、`avc1.4d0028` 与 720p30 `avc1.42001f` 全部返回 `true`。
 - Edge 153.0.4234.48：同样全部返回 `true`，并生成相同参数的可播放文件。
 
