@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MP4 导出验证</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        font: 14px/1.6 ui-sans-serif, system-ui, sans-serif;
+        background: #0b1310;
+        color: #e2e8f0;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 12px;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-all;
+        background: #111f1a;
+        border: 1px solid #1f3b31;
+        border-radius: 8px;
+        padding: 12px;
+      }
+      video {
+        width: 100%;
+        max-width: 960px;
+        background: #000;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>逐帧渲染 → WebCodecs H.264 → MP4</h1>
+    <p>验证工具，独立于正式应用入口；由 <code>tools/mp4-probe</code> 提供，不参与产品构建。</p>
+    <video id="player" controls muted playsinline></video>
+    <pre id="log">正在初始化…</pre>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
