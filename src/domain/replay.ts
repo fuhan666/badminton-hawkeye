@@ -1,4 +1,5 @@
-import { CONTACT_RADIUS } from './court'
+import { CONTACT_RADIUS, COURT, LINE, VALID_AREA } from './court'
+import type { GroundPoint, MatchFormat } from './court'
 import type { ReplayInput } from './direction'
 import { isInsideCourt } from './judgement'
 
@@ -99,6 +100,28 @@ function normalize(v: Vec3): Vec3 {
   const length = Math.hypot(v.x, v.y, v.z)
   if (length < 1e-9) return { x: 0, y: 0, z: 0 }
   return { x: v.x / length, y: v.y / length, z: v.z / length }
+}
+
+function dot(a: Vec3, b: Vec3): number {
+  return a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  }
+}
+
+function lerpVec(a: Vec3, b: Vec3, k: number): Vec3 {
+  return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k }
+}
+
+function unitGround(x: number, z: number): GroundPoint {
+  const length = Math.hypot(x, z)
+  if (length < 1e-9) return { x: 0, z: 1 }
+  return { x: x / length, z: z / length }
 }
 
 /**
@@ -272,21 +295,347 @@ function followPose(ball: Vec3, flight: Flight): { position: Vec3; target: Vec3 
  * 四段分镜的相机关键帧。关键帧由落点与方向解析决定，段边界处位姿完全共享，
  * 之间用三次 Hermite 过渡，位置、视点与 FOV 都连续。
  */
-function buildCameraKeys(flight: Flight): CameraKey[] {
+
+/** 近景构图的垂直视场角；FOV 固定，用机位距离适配不同落点位置 */
+const FRAMING_FOV = 30
+/** 构图要求覆盖的边界线长度（米），沿边界线以落点为中心量取 */
+const LINE_CONTEXT = 0.42
+/** 落到边线附近（向内或向外）多少米内视为需要该线入画 */
+const LINE_NEAR = 1.2
+/** 16:9 画面里构图点允许出现的范围，避开结果牌占据的底部 */
+const FRAME_LIMIT_X = 0.74
+const FRAME_LIMIT_TOP = 0.66
+const FRAME_LIMIT_BOTTOM = -0.6
+/** 落点自身留在画面中部，近景不把落点顶到边缘 */
+const CONTACT_LIMIT_X = 0.4
+const CONTACT_LIMIT_TOP = 0.3
+const CONTACT_LIMIT_BOTTOM = -0.45
+const FRAME_ASPECT = 16 / 9
+/** 机位高度随水平距离抬升，近景也是 55°–70° 的俯角，画面以地面为主 */
+const FRAMING_HEIGHT_BASE = 0.4
+const FRAMING_HEIGHT_PER_M = 1.5
+const FRAMING_HEIGHT_MIN = 1.1
+const FRAMING_HEIGHT_MAX = 7
+/** 近景机位允许的最近距离；再近就只能看到一小块地面 */
+const FRAMING_DISTANCE_MIN = 1.0
+/** 视点从落点向场内偏移，落点抬到画面上半部，下半部留给球场 */
+const FRAMING_TARGET_SHIFT = 0.2
+
+interface FramingSegment {
+  a: GroundPoint
+  b: GroundPoint
+}
+
+interface FramingPlan {
+  /** 由有效区域指向场外的单位法线；机位放在这一侧，场地面向镜头 */
+  outward: GroundPoint
+  /** 需要入画的边界线带 */
+  segments: FramingSegment[]
+}
+
+function sidelineSegment(x: number, z: number, span: number): FramingSegment {
+  const halfLength = COURT.halfLength
+  return {
+    a: { x, z: clamp(z - span, -halfLength, halfLength) },
+    b: { x, z: clamp(z + span, -halfLength, halfLength) },
+  }
+}
+
+function endlineSegment(x: number, z: number, span: number): FramingSegment {
+  const halfWidth = COURT.doublesHalfWidth
+  return {
+    a: { x: clamp(x - span, -halfWidth, halfWidth), z },
+    b: { x: clamp(x + span, -halfWidth, halfWidth), z },
+  }
+}
+
+/** 深界内时用来做参照的一条场内线；不参与判定，只用于构图 */
+interface ReferenceLine {
+  a: GroundPoint
+  b: GroundPoint
+  /** true 表示线沿 x 轴走向（z 固定） */
+  horizontal: boolean
+  coordinate: number
+}
+
+/** 球场上的全部白线，按当前赛制的有效边界取边线位置 */
+function paintedLines(format: MatchFormat): ReferenceLine[] {
+  const { halfWidth, halfLength } = VALID_AREA[format]
+  const halfCourtWidth = COURT.doublesHalfWidth
+  const lines: ReferenceLine[] = []
+  for (const sign of [-1, 1]) {
+    const x = sign * halfWidth
+    lines.push({
+      a: { x, z: -halfLength },
+      b: { x, z: halfLength },
+      horizontal: false,
+      coordinate: x,
+    })
+    const z = sign * halfLength
+    lines.push({
+      a: { x: -halfCourtWidth, z },
+      b: { x: halfCourtWidth, z },
+      horizontal: true,
+      coordinate: z,
+    })
+    for (const serviceZ of [LINE.shortServiceLineZ, LINE.doublesLongServiceLineZ]) {
+      lines.push({
+        a: { x: -halfCourtWidth, z: sign * serviceZ },
+        b: { x: halfCourtWidth, z: sign * serviceZ },
+        horizontal: true,
+        coordinate: sign * serviceZ,
+      })
+    }
+    // 中线：前发球线到端线
+    lines.push({
+      a: { x: 0, z: sign * LINE.shortServiceLineZ },
+      b: { x: 0, z: sign * LINE.endLineZ },
+      horizontal: false,
+      coordinate: 0,
+    })
+  }
+  return lines
+}
+
+/**
+ * 深界内落点：挑一条位于球飞行前方、离落点最近的场内白线作参照。
+ * 机位留在来球一侧，跟随段收尾后直接压低靠近，不做绕场大回环。
+ */
+function nearestLinePlan(
+  landing: GroundPoint,
+  format: MatchFormat,
+  dir: GroundPoint,
+): FramingPlan {
+  const lines = paintedLines(format)
+  let best: ReferenceLine | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const line of lines) {
+    const dx = line.b.x - line.a.x
+    const dz = line.b.z - line.a.z
+    const lengthSq = dx * dx + dz * dz
+    const t =
+      lengthSq < 1e-12
+        ? 0
+        : clamp(((landing.x - line.a.x) * dx + (landing.z - line.a.z) * dz) / lengthSq, 0, 1)
+    const nearest = { x: line.a.x + dx * t, z: line.a.z + dz * t }
+    // 只取落点前方（以球飞行方向计）不远的线，落在身后的线压不进近景
+    if ((nearest.x - landing.x) * dir.x + (nearest.z - landing.z) * dir.z > 0.35) continue
+    const distance = Math.hypot(landing.x - nearest.x, landing.z - nearest.z)
+    if (distance < bestDistance - 1e-9) {
+      best = line
+      bestDistance = distance
+    }
+  }
+
+  const line = best ?? lines[0]
+  const span = 1.1
+  const segment: FramingSegment = line.horizontal
+    ? {
+        a: { x: clamp(landing.x - span, line.a.x, line.b.x), z: line.coordinate },
+        b: { x: clamp(landing.x + span, line.a.x, line.b.x), z: line.coordinate },
+      }
+    : {
+        a: { x: line.coordinate, z: clamp(landing.z - span, line.a.z, line.b.z) },
+        b: { x: line.coordinate, z: clamp(landing.z + span, line.a.z, line.b.z) },
+      }
+
+  return { outward: { x: -dir.x, z: -dir.z }, segments: [segment] }
+}
+
+/**
+ * 挑选近景需要交代的参照线：压边线看该条边线，压角看两条线，明显界内或界外
+ * 至少带上最近的一条有效边界。单打只用单打边线，不把旁边的双打线当有效边界。
+ */
+function framingPlan(landing: GroundPoint, format: MatchFormat, dir: GroundPoint): FramingPlan {
+  const { halfWidth, halfLength } = VALID_AREA[format]
+  const signX = landing.x >= 0 ? 1 : -1
+  const signZ = landing.z >= 0 ? 1 : -1
+  const nearSide = Math.abs(landing.x) - halfWidth > -LINE_NEAR
+  const nearEnd = Math.abs(landing.z) - halfLength > -LINE_NEAR
+  const sideLine = () => sidelineSegment(signX * halfWidth, landing.z, LINE_CONTEXT)
+  const endLine = () => endlineSegment(landing.x, signZ * halfLength, LINE_CONTEXT)
+
+  if (nearSide && nearEnd) {
+    return { outward: unitGround(signX, signZ), segments: [sideLine(), endLine()] }
+  }
+  if (nearSide) {
+    return { outward: { x: signX, z: 0 }, segments: [sideLine()] }
+  }
+  if (nearEnd) {
+    return { outward: { x: 0, z: signZ }, segments: [endLine()] }
+  }
+  return nearestLinePlan(landing, format, dir)
+}
+
+/**
+ * 视线方向：机位压在边界线外侧，向场内看落点与线带，画面主体是球场，
+ * 场外只占镜头前的一窄条。斜角取向来球一侧，延续跟随段的飞行方向。
+ */
+function framingDirection(plan: FramingPlan, flight: Flight): GroundPoint {
+  const outward = plan.outward
+  let tangent = { x: -outward.z, z: outward.x }
+  if (tangent.x * flight.dir.x + tangent.z * flight.dir.z < 0) {
+    tangent = { x: -tangent.x, z: -tangent.z }
+  }
+  return unitGround(outward.x * 0.9 + tangent.x * 0.42, outward.z * 0.9 + tangent.z * 0.42)
+}
+
+/** 构图采样点：落点圆心，以及每条线带上等距的五个点 */
+function focusPoints(landing: GroundPoint, plan: FramingPlan): GroundPoint[] {
+  const points: GroundPoint[] = [{ x: landing.x, z: landing.z }]
+  for (const segment of plan.segments) {
+    for (let index = 0; index <= 4; index += 1) {
+      const k = index / 4
+      points.push({
+        x: segment.a.x + (segment.b.x - segment.a.x) * k,
+        z: segment.a.z + (segment.b.z - segment.a.z) * k,
+      })
+    }
+  }
+  return points
+}
+
+/** 地面点在给定机位下的归一化画面坐标；深度为负时返回 null */
+function projectGround(
+  position: Vec3,
+  target: Vec3,
+  fov: number,
+  point: GroundPoint,
+): { x: number; y: number } | null {
+  const forward = normalize(sub(target, position))
+  if (forward.x === 0 && forward.y === 0 && forward.z === 0) return null
+  const right = normalize(cross(forward, { x: 0, y: 1, z: 0 }))
+  const up = cross(right, forward)
+  const rel = { x: point.x - position.x, y: 0 - position.y, z: point.z - position.z }
+  const depth = dot(rel, forward)
+  if (depth < 0.2) return null
+  const tan = Math.tan((fov * Math.PI) / 360)
+  return {
+    x: dot(rel, right) / (depth * tan * FRAME_ASPECT),
+    y: dot(rel, up) / (depth * tan),
+  }
+}
+
+/** 机位不得停在网面附近；球网占据 z=0、|x| ≤ 3.05、0.76–1.55 m 的范围 */
+const NET_CLEARANCE_Z = 0.55
+const NET_CLEARANCE_Y = COURT.netPostHeight + 0.14
+
+function nearNet(position: Vec3): boolean {
+  return (
+    Math.abs(position.z) < NET_CLEARANCE_Z &&
+    Math.abs(position.x) < COURT.doublesHalfWidth + 0.2 &&
+    position.y < NET_CLEARANCE_Y
+  )
+}
+
+/**
+ * 由落点反解近景机位：固定 FOV 与机位方向，从近到远找能把落点与所需线带
+ * 都收进安全范围内的最小距离，避免手动调参在四边四角间顾此失彼。
+ */
+function framingPose(landing: GroundPoint, plan: FramingPlan, flight: Flight): CameraKey {
+  const direction = framingDirection(plan, flight)
+  const target: Vec3 = {
+    x: landing.x - plan.outward.x * FRAMING_TARGET_SHIFT,
+    y: 0.02,
+    z: landing.z - plan.outward.z * FRAMING_TARGET_SHIFT,
+  }
+  const points = focusPoints(landing, plan)
+
+  const poseAt = (distance: number): CameraKey => ({
+    t: 0,
+    position: {
+      x: landing.x - direction.x * distance,
+      y: clamp(
+        FRAMING_HEIGHT_BASE + distance * FRAMING_HEIGHT_PER_M,
+        FRAMING_HEIGHT_MIN,
+        FRAMING_HEIGHT_MAX,
+      ),
+      z: landing.z - direction.z * distance,
+    },
+    target,
+    fov: FRAMING_FOV,
+  })
+
+  const fits = (pose: CameraKey): boolean => {
+    if (nearNet(pose.position)) return false
+    const contact = projectGround(pose.position, pose.target, pose.fov, landing)
+    if (
+      !contact ||
+      Math.abs(contact.x) > CONTACT_LIMIT_X ||
+      contact.y > CONTACT_LIMIT_TOP ||
+      contact.y < CONTACT_LIMIT_BOTTOM
+    ) {
+      return false
+    }
+    return points.every((point) => {
+      const ndc = projectGround(pose.position, pose.target, pose.fov, point)
+      if (!ndc) return false
+      return (
+        Math.abs(ndc.x) <= FRAME_LIMIT_X &&
+        ndc.y <= FRAME_LIMIT_TOP &&
+        ndc.y >= FRAME_LIMIT_BOTTOM
+      )
+    })
+  }
+
+  // 低机位不越过球网：停在落点同一侧，避免网面糊在镜头前
+  const crossingDistance = (Math.abs(landing.z) - 0.35) / Math.max(Math.abs(direction.z), 1e-6)
+  const staysSameSide = direction.z * landing.z > 0
+  const maxDistance = staysSameSide
+    ? clamp(crossingDistance, FRAMING_DISTANCE_MIN, 9)
+    : 9
+
+  for (let distance = FRAMING_DISTANCE_MIN; distance <= maxDistance + 1e-9; distance += 0.02) {
+    const pose = poseAt(distance)
+    if (fits(pose)) return pose
+  }
+  return poseAt(maxDistance)
+}
+
+/** 跟随段结束到近景之间越过网面时，抬出一个过网机位，避免镜头穿过球网 */
+function netGuardKey(from: CameraKey, to: CameraKey): CameraKey | null {
+  if (from.position.z * to.position.z >= 0) return null
+  const k = from.position.z / (from.position.z - to.position.z)
+  const crossingX = from.position.x + (to.position.x - from.position.x) * k
+  if (Math.abs(crossingX) > COURT.doublesHalfWidth + 0.2) return null
+  const crossingY = from.position.y + (to.position.y - from.position.y) * k
+  if (crossingY > COURT.netPostHeight + 0.08) return null
+  if (crossingY < 0.62) return null
+
+  return {
+    t: from.t + (to.t - from.t) * clamp(k, 0.2, 0.8),
+    position: { x: crossingX, y: COURT.netPostHeight + 0.55, z: 0 },
+    target: lerpVec(from.target, to.target, clamp(k, 0.2, 0.8)),
+    fov: from.fov + (to.fov - from.fov) * clamp(k, 0.2, 0.8),
+  }
+}
+
+function buildCameraKeys(flight: Flight, format: MatchFormat): CameraKey[] {
   const dir = flight.dir
   const perp = { x: -dir.z, z: dir.x }
   const landing = flight.landing
 
-  const place = (forward: number, side: number, height: number): Vec3 => ({
-    x: landing.x - dir.x * forward + perp.x * side,
-    y: height,
-    z: landing.z - dir.z * forward + perp.z * side,
-  })
-
   const followBall = ballPositionAt(flight, flightProgressAt(OVERVIEW_END))
   const slowBall = ballPositionAt(flight, flightProgressAt(FOLLOW_END))
 
-  return [
+  const followEnd: CameraKey = {
+    t: FOLLOW_END,
+    ...followPose(slowBall, flight),
+    fov: FOLLOW_FOV,
+  }
+  const framing = framingPose(landing, framingPlan(landing, format, dir), flight)
+  const contact: CameraKey = { ...framing, t: CONTACT_TIME }
+  // 定格只做小幅前推：沿原视线靠近落点，视点与 FOV 几乎不动
+  const pushIn = 0.055
+  const pushed = lerpVec(contact.position, contact.target, pushIn)
+  const result: CameraKey = {
+    t: REPLAY_DURATION,
+    position: nearNet(pushed) ? contact.position : pushed,
+    target: contact.target,
+    fov: FRAMING_FOV - 1,
+  }
+
+  const keys: CameraKey[] = [
     {
       t: 0,
       // 高角度俯瞰：站在来球一侧后方，整片球场与球网都收进画面
@@ -303,25 +652,20 @@ function buildCameraKeys(flight: Flight): CameraKey[] {
       ...followPose(followBall, flight),
       fov: FOLLOW_FOV,
     },
-    {
-      t: FOLLOW_END,
-      ...followPose(slowBall, flight),
-      fov: FOLLOW_FOV,
-    },
-    {
-      t: SLOW_MO_END,
-      // 贴地近景：压到白线尺度，圆形印记与线条同屏
-      position: place(0.72, 0.55, 0.42),
-      target: { x: landing.x, y: 0.012, z: landing.z },
-      fov: 26,
-    },
-    {
-      t: REPLAY_DURATION,
-      position: place(0.55, 0.42, 0.36),
-      target: { x: landing.x, y: 0.012, z: landing.z },
-      fov: 24,
-    },
+    followEnd,
   ]
+
+  const guard = netGuardKey(followEnd, contact)
+  if (guard) keys.push(guard)
+  keys.push(contact)
+  keys.push({
+    t: SLOW_MO_END,
+    position: contact.position,
+    target: contact.target,
+    fov: contact.fov,
+  })
+  keys.push(result)
+  return keys
 }
 
 function cameraAt(keys: CameraKey[], time: number): CameraKey {
@@ -374,7 +718,7 @@ export function evaluateReplay(input: ReplayInput, time: number): ReplayFrame {
   const clampedTime = clamp(time, 0, REPLAY_DURATION)
   const flight = buildFlight(input)
   const progress = flightProgressAt(clampedTime)
-  const cameraKeys = buildCameraKeys(flight)
+  const cameraKeys = buildCameraKeys(flight, input.format)
   const view = cameraAt(cameraKeys, clampedTime)
 
   const landed = clampedTime >= CONTACT_TIME

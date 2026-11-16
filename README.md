@@ -16,7 +16,8 @@
 - 聚焦球场后可用方向键微调，每次 1 mm，按住 Shift 为 10 mm；+x 向右、+z 向下。
 - 切换赛制保留两个点，只更新有效边界与判定。
 - 三维回放约 5 秒，四段分镜：球场全景 → 侧后方跟随 → 慢放触地 → 印记与 IN/OUT 定格。
-- 球托底端落在编辑圆心，触地后球体淡出，13 mm 圆形印记与编辑圆同尺寸，白线用几何面绘制。
+- 慢放段在触地那一刻就到位：近景按落点自动挑参照线，压边线带上该条边线，压角带上相交的两条线，明显界内带上最近的一条场内白线；3.2 s 之后只做极小前推。
+- 球托底端落在编辑圆心，触地后球体淡出，13 mm 圆形印记与编辑圆同尺寸并压在白线之上，白线用几何面绘制。
 - 支持播放、暂停、重播与拖动时间轴查看任意时刻；改落点、方向或赛制后自动回零并采用新输入。
 - 相同输入与时间得到相同画面：回放画面只由 `evaluateReplay(input, time)` 的纯函数结果决定。
 
@@ -26,7 +27,20 @@
 
 ![两点重合时提示调整，播放与导出保持禁用](docs/images/court-editor-overlap.png)
 
-![三维回放定格：13 mm 圆形印记压在白线内侧，画面下方 IN 结果牌](docs/images/replay-result.png)
+![三维回放全景：高角度俯瞰整片球场与球网](docs/images/replay-overview.png)
+
+![三维回放跟随段：机位随球体稳定推进](docs/images/replay-follow.png)
+
+## 回放样片
+
+双打场地，来向点都在落点正后方 3.2 m；左右两列分别取触地时刻 3.2 s 与定格 4.6 s。四类落点都能看清球或印记与哪条线的关系，画面下方是 IN/OUT 结果牌。
+
+| 落点 (x, z) | 触地 3.2 s | 定格 4.6 s | 判定 |
+| --- | --- | --- | --- |
+| 压双打边线 `3.055, 3.2` | ![压边线触地](docs/images/replay-line-contact.png) | ![压边线定格](docs/images/replay-line-result.png) | IN |
+| 角落相交 `3.055, 6.705` | ![角落触地](docs/images/replay-corner-contact.png) | ![角落定格](docs/images/replay-corner-result.png) | IN |
+| 明显界内 `2.2, 3.2` | ![界内触地](docs/images/replay-inside-contact.png) | ![界内定格](docs/images/replay-inside-result.png) | IN |
+| 明显界外 `3.3, 3.2` | ![界外触地](docs/images/replay-outside-contact.png) | ![界外定格](docs/images/replay-outside-result.png) | OUT |
 
 ## 操作
 

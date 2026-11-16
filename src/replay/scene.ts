@@ -15,13 +15,13 @@ export interface ReplayScene {
 
 const LINE_COLOR = 0xf8fafc
 const COURT_COLOR = 0x2f7d5e
-const SURROUND_COLOR = 0x0e1f1a
-const BACKGROUND_COLOR = 0x08120f
+const SURROUND_COLOR = 0x33574a
+const BACKGROUND_COLOR = 0x0d1a16
 const MARKER_IN = 0xfbbf24
 const MARKER_OUT = 0xf87171
 
 const FORWARD = new THREE.Vector3(0, 0, 1)
-const MARKER_Y = 0.0018
+const MARKER_Y = 0.006
 
 function addCourtLines(scene: THREE.Scene, material: THREE.Material) {
   const lineY = 0.004
@@ -219,18 +219,18 @@ export function createReplayScene(canvas: HTMLCanvasElement): ReplayScene {
   renderer.outputColorSpace = THREE.SRGBColorSpace
 
   const scene = new THREE.Scene()
-  scene.fog = new THREE.Fog(BACKGROUND_COLOR, 16, 46)
+  scene.fog = new THREE.Fog(BACKGROUND_COLOR, 20, 60)
 
   const camera = new THREE.PerspectiveCamera(42, 16 / 9, 0.05, 140)
   scene.add(camera)
 
-  scene.add(new THREE.HemisphereLight(0xd6e8ff, 0x0d241c, 1.2))
+  scene.add(new THREE.HemisphereLight(0xd6e8ff, 0x122a22, 1.0))
 
-  const keyLight = new THREE.DirectionalLight(0xffffff, 1.7)
+  const keyLight = new THREE.DirectionalLight(0xffffff, 1.35)
   keyLight.position.set(5, 12, 7)
   scene.add(keyLight)
 
-  const fillLight = new THREE.DirectionalLight(0x93c5fd, 0.45)
+  const fillLight = new THREE.DirectionalLight(0x93c5fd, 0.35)
   fillLight.position.set(-8, 6, -9)
   scene.add(fillLight)
 
