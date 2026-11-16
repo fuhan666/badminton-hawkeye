@@ -102,11 +102,40 @@ SVG 负责全场选点和局部精调，两者用同一份米制数据与坐标�
 
 ## 三维回放
 
-用 `evaluateReplay(input, time)` 统一计算球的位置、朝向、镜头和结果显示。相同输入与时间产生相同画面，预览和导出共用这一逻辑。
+### 确定性内核
 
-用参数曲线生成固定风格球路，朝向跟随曲线切线，终点对齐球托底端。跨网路径保留合理高度。白线使用清晰的几何面，最终圆形印记与编辑器共享尺寸。
+`src/domain/replay.ts` 导出 `evaluateReplay(input, time)`，输入为既有的 `ReplayInput { format, landing, direction }`，输出是普通对象：
 
-分镜围绕飞行和落地关系构图，分别覆盖边线、角落和远离边界的位置。结果文字绘入导出画面。
+```ts
+interface ReplayFrame {
+  time: number                 // 夹到 [0, 5]
+  flightProgress: number       // 0–1，触地后恒为 1
+  segment: 'overview' | 'follow' | 'slowmo' | 'result'
+  ball: { position: Vec3; forward: Vec3; opacity: number }
+  marker: { center: Vec3; radius: number; opacity: number }
+  camera: { position: Vec3; target: Vec3; fov: number }
+  verdict: 'IN' | 'OUT'
+  resultOpacity: number
+}
+```
+
+内核不读时钟、随机数、帧率或上一帧结果，时间先夹到有效区间，因此相同输入与时刻逐字段相等。渲染层不得自行积分球路或追赶目标。
+
+### 时间与球路
+
+总长 5 s，触地 3.2 s。飞行进度用单调三次插值从关键帧 (0 s, 0) → (0.8 s, 0.24) → (2.0 s, 0.68) → (3.2 s, 1) 求出，前三段逐段加速、最后一段最慢，形成慢放。水平位置按进度线性推进；高度为线性下降加一项正弦抬升，抬升量按跨网处目标净高 1.9 m 解析求出，并受 6 m 上限约束。未跨网的输入不加抬升，仍可回放。
+
+球托底端在进度 1 处直接取落点圆心，不再插值，因此 `ball.position` 在 3.2 s 之后精确等于 `(landing.x, 0, landing.z)`。朝向取曲线解析切线；触地后退化为末段方向。
+
+### 模型原点与场景
+
+球体局部原点是球托底端，羽毛沿纵轴向后，飞行前向为局部 +Z；姿态只改变朝向，不挪动接触原点。`src/replay/scene.ts` 只做搬运：按帧设置球体位置与朝向、镜头位姿与 FOV、印记透明度与颜色、结果牌透明度。白线用薄面几何按 `LINE` 中心线布置，外沿不偏移；球网按网柱 1.55 m、中央 1.524 m 的曲线建立网格。
+
+### 分镜与结果
+
+四段为 0–0.8 s 全景、0.8–2.0 s 跟随、2.0–3.6 s 慢放触地、3.6–5.0 s 印记定格。相机关键帧在段边界完全共享，段间用三次 Hermite 过渡，位置、视点与 FOV 连续；跟随段采用相对球体固定的机位，整段构图稳定。结果牌用 CanvasTexture 绘制并挂在相机下方，随 FOV 换算尺寸，保证与画面同屏且能随帧导出。
+
+圆形印记半径取 `CONTACT_RADIUS`，只抬高 1.8 mm 避免与地面闪面，不放大判定圆。
 
 ## 视频导出
 

@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import CourtView from './components/CourtView'
+import ReplayPreview from './components/ReplayPreview'
 import type { EditTarget } from './components/CourtView'
 import { CONTACT_RADIUS } from './domain/court'
 import type { GroundPoint, MatchFormat } from './domain/court'
@@ -22,11 +23,27 @@ export default function App() {
   const [incoming, setIncoming] = useState<GroundPoint | null>(null)
   const [target, setTarget] = useState<EditTarget>('landing')
   const [notice, setNotice] = useState<string | null>(null)
+  const [replayPlaying, setReplayPlaying] = useState(false)
+  const [playSignal, setPlaySignal] = useState(0)
+  const [pauseSignal, setPauseSignal] = useState(0)
 
   const inBounds = isInsideCourt(landing, format)
   const direction = resolveDirection(landing, incoming)
-  const replayInput = buildReplayInput(format, landing, incoming)
+  const replayInput = useMemo(
+    () => buildReplayInput(format, landing, incoming),
+    [format, landing, incoming],
+  )
   const ready = replayInput !== null
+
+  // 输入变化即结束当前回放，预览组件会把时间轴回零
+  useEffect(() => {
+    setReplayPlaying(false)
+  }, [replayInput])
+
+  function handlePlayback() {
+    if (replayPlaying) setPauseSignal((value) => value + 1)
+    else setPlaySignal((value) => value + 1)
+  }
 
   function handleChange(next: EditTarget, point: GroundPoint) {
     setNotice(null)
@@ -49,7 +66,7 @@ export default function App() {
       <header className="app__header">
         <div>
           <h1>羽毛球鹰眼模拟器</h1>
-          <p className="app__subtitle">选点与判定 · 场地尺寸取自 BWF 规则，量至白线外沿</p>
+          <p className="app__subtitle">选点 · 判定 · 三维回放 · 场地尺寸取自 BWF 规则，量至白线外沿</p>
         </div>
         <div className="header__side">
           <div className="format" role="group" aria-label="赛制">
@@ -71,10 +88,10 @@ export default function App() {
               type="button"
               className="action"
               disabled={!ready}
-              title={ready ? '进入三维回放' : '需要有效的落点与来向方向'}
-              onClick={() => handlePending('三维回放')}
+              title={ready ? '在右侧预览中播放三维回放' : '需要有效的落点与来向方向'}
+              onClick={handlePlayback}
             >
-              播放
+              {replayPlaying ? '暂停' : '播放'}
             </button>
             <button
               type="button"
@@ -238,6 +255,25 @@ export default function App() {
             </dl>
           </section>
 
+          <section className="panel">
+            <div className="panel__head">
+              <h2>三维回放</h2>
+              <span className="panel__hint">约 5 s · 四段分镜</span>
+            </div>
+            {replayInput ? (
+              <ReplayPreview
+                input={replayInput}
+                playSignal={playSignal}
+                pauseSignal={pauseSignal}
+                onPlayingChange={setReplayPlaying}
+              />
+            ) : (
+              <p className="replay__empty">
+                放置落点并设定来向点后，这里会生成三维回放；两点重合或缺少来向时不播放。
+              </p>
+            )}
+          </section>
+
           <section className="panel tips">
             <h2>操作</h2>
             <ul>
@@ -245,6 +281,7 @@ export default function App() {
               <li>拖动任一手柄，或聚焦球场后用方向键 1 mm、Shift 10 mm 微调。</li>
               <li>来向点只决定方向，同方向不同距离得到相同输入。</li>
               <li>两点重合时播放与导出保持禁用，拖开即恢复。</li>
+              <li>回放约 5 秒：全景、跟随、慢放触地、印记与结果；可暂停、重播或拖动时间轴。</li>
               <li>切换单打／双打保留两个点，只更新有效边界与判定。</li>
             </ul>
             {notice ? <p className="tips__notice">{notice}</p> : null}
