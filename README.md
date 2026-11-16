@@ -20,8 +20,9 @@
 - 球托底端落在编辑圆心，触地后球体淡出，13 mm 圆形印记与编辑圆同尺寸并压在白线之上，白线用几何面绘制。
 - 支持播放、暂停、重播与拖动时间轴查看任意时刻；改落点、方向或赛制后自动回零并采用新输入。
 - 相同输入与时间得到相同画面：回放画面只由 `evaluateReplay(input, time)` 的纯函数结果决定。
-
-视频导出尚未接入，导出入口只做输入门控，不会伪造下载。
+- 导出正式 MP4：点击「导出视频」后按固定输入逐帧渲染编码，显示 0–100% 进度，可随时取消；完成后自动下载 `badminton-hawkeye-<赛制>-x<x>-z<z>-<时间戳>.mp4`。
+- 导出固定 1920×1080 / 30 fps / 150 帧 / 5.000 s、无音轨；点击时的设置会被快照，导出期间继续编辑不影响本次文件。
+- 取消会立即停止送帧、丢弃半成品，不产生下载，之后可重新导出；当前环境缺少 H.264 编码能力时给出清楚提示，三维预览不受影响。
 
 ![选点界面：双打边线相切判 IN，来向箭头与局部精调](docs/images/court-editor.png)
 
@@ -64,31 +65,48 @@ npm run dev -- --host 127.0.0.1
 
 ```bash
 npm run build   # TypeScript 类型检查 + 生产构建，输出到 dist/
-npm test        # Vitest 单次运行，覆盖几何、判定、方向与微调用例
+npm test        # Vitest 单次运行，覆盖几何、判定、方向、微调与导出用例
 npm run preview # 预览构建产物
 ```
 
+## 导出实现
+
+导出入口在 `src/export/`：`exportReplay.ts` 负责能力判断、逐帧渲染编码、封装与清理，`useExportJob.ts` 负责单个活动任务、进度状态与下载。导出使用独立画布与 `pixelRatio: 1`，与预览共享 `evaluateReplay` 和同一个 Three.js 场景，因此轨迹、触地点、印记与 IN/OUT 和预览一致；同一输入两次导出的画面相同。
+
+- 编码 `avc1.420028`（H.264 Baseline）、8 Mbps、每 30 帧一个关键帧；时间戳 `round(i × 10⁶ / 30)`，最后一帧结束于 5,000,000 µs。
+- 编码队列超过 8 帧时等待 `dequeue` 做背压，并定期让出事件循环，保证进度可见、取消可响应。
+- 取消与失败都进入统一清理：关闭 `VideoEncoder`、丢弃未完成的封装、释放场景与画布；成功路径先 `flush` 再等写入链、`source.close()`、`output.finalize()`，完整封装后才触发下载。
+- 能力判断只用 `VideoEncoder.isConfigSupported`，不按浏览器品牌推断。
+
 ## 导出验证（开发工具）
 
-`tools/mp4-probe` 用固定回放输入验证「逐帧渲染 → WebCodecs H.264 → MP4 封装 → 浏览器播放」，用于确定导出的编码参数与封装库，不是正式导出功能（应用内导出仍未接入）。
+`tools/mp4-probe` 是最初的参数验证工具：用固定回放输入跑「逐帧渲染 → WebCodecs H.264 → MP4 封装 → 浏览器播放」，用于确定编码参数与封装库。它不经过产品界面，不是正式导出路径。
 
 ```bash
 npm run probe -- --browser chrome   # 也可用 --browser edge
 ```
 
-脚本会自己起 Vite 与无头浏览器，跑完把产物写到 `tools/mp4-probe/out/`（已被 git 忽略）：`sample.mp4`、`contact-3.2s.png`、`result-4.6s.png` 和 `report.json`。运行需要本机安装 Chrome 或 Edge，默认端口 5199，可用 `--port` 改。单独做类型检查用 `npm run probe:typecheck`。
+`tools/export-smoke` 验证正式应用路径：打开应用、在界面上放置落点与来向点，点击「导出视频」，完整走一遍成功、取消、取消后重试、OUT 结果和不支持环境提示。
+
+```bash
+npm run smoke:export -- --browser chrome   # 也可用 --browser edge
+```
+
+两个脚本都会自己起 Vite 与无头浏览器，产物写到各自的 `out/`（已被 git 忽略）。probe 输出 `sample.mp4`、关键帧截图和 `report.json`；smoke 输出 `sample-app-export.mp4`、`sample-out-export.mp4`、状态截图、预览对照图和 `report.json`。运行需要本机安装 Chrome 或 Edge，probe 默认端口 5199、smoke 默认 5201，可用 `--port` 改。单独做类型检查用 `npm run probe:typecheck`。
 
 实测参数、封装选型与许可证说明见 `docs/TECHNICAL_DESIGN.md` 的「视频导出」一节。
 
 ## 目录
 
 ```
-src/domain/      球场常量、圆与矩形判定、视图窗口、方向归一化、键盘微调、回放内核
-src/components/  球场几何、可交互的 SVG 视图、三维预览与播放控制
-src/replay/      Three.js 场景：球场、球网、球体、印记与结果牌
-src/App.tsx      布局、赛制与编辑目标切换、判定和入口门控
-docs/            产品需求、技术方案、交付计划
-tools/mp4-probe/ 导出技术验证：逐帧渲染、H.264 编码、MP4 封装与播放验证
+src/domain/        球场常量、圆与矩形判定、视图窗口、方向归一化、键盘微调、回放内核
+src/components/    球场几何、可交互的 SVG 视图、三维预览、导出状态与播放控制
+src/replay/        Three.js 场景：球场、球网、球体、印记与结果牌
+src/export/        正式导出：能力判断、逐帧编码、封装、进度、取消与下载
+src/App.tsx        布局、赛制与编辑目标切换、判定和入口门控
+docs/              产品需求、技术方案、交付计划
+tools/mp4-probe/   导出参数验证：逐帧渲染、H.264 编码、MP4 封装与播放验证
+tools/export-smoke/ 正式导出路径的浏览器 smoke：成功、取消、重试、OUT 与不支持提示
 ```
 
 ## 判定口径
