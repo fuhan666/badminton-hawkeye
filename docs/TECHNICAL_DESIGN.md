@@ -198,9 +198,9 @@ MPL-2.0 是文件级弱 copyleft：本项目只通过 npm 引用未修改的包�
 
 实现位于 `src/export/exportReplay.ts`（编码、封装、清理）与 `src/export/useExportJob.ts`（单任务、进度、下载）。
 
-1. 点击导出时复制赛制、落点与单位方向作为快照，之后继续编辑不改变本次视频；同时只允许一个活动任务。
+1. 点击导出时复制赛制、落点与单位方向作为快照，并固定当前地胶颜色，之后继续编辑或换色不改变本次视频；同时只允许一个活动任务。
 2. 能力判断：`VideoEncoder` / `VideoFrame` 缺失，或 `isConfigSupported` 对完整 1080p30 配置返回 false / 拒绝，都给出“当前环境不支持视频导出”的可见提示，预览照常。
-3. 独立画布 1920×1080 + `createReplayScene(canvas, { pixelRatio: 1 })`，不抓取预览画布；按 `t = i / 30` 调 `evaluateReplay` 渲染 150 帧。
+3. 独立画布 1920×1080 + `createReplayScene(canvas, courtColor, { pixelRatio: 1 })`，不抓取预览画布；按 `t = i / 30` 调 `evaluateReplay` 渲染 150 帧。
 4. 每帧构造 `VideoFrame` 后立即编码并关闭；`keyFrame` 取 `i % 30 === 0`。`encodeQueueSize > 8` 时等待 `dequeue` 背压，每 5 帧让出一次事件循环。
 5. 进度按编码回调确认的帧数换算 0–100%，界面区分准备、编码、封装、收尾；封装完成前不宣告成功。
 6. 取消通过 `AbortController` 在每次送帧、背压等待、flush 后、写入链后、finalize 前检查；取消后立即停止送帧，关闭编码器并 `output.cancel()` 丢弃半成品，不建立下载。编码或封装错误同样冒泡，不能被 flush 成功掩盖。

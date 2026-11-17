@@ -1,9 +1,12 @@
 import type { ReactNode } from 'react'
+import { COURT_COLORS } from '../courtColors'
+import type { CourtColor } from '../courtColors'
 import { COURT, LINE, VALID_AREA } from '../domain/court'
 import type { MatchFormat } from '../domain/court'
 
 interface CourtGeometryProps {
   format: MatchFormat
+  courtColor: CourtColor
   children?: ReactNode
 }
 
@@ -11,7 +14,7 @@ interface CourtGeometryProps {
  * 球场俯视图几何。全部使用米制坐标，y 轴对应 +z（向下）。
  * 描边一律以中心线为路径，线带宽 0.04 m 由 strokeWidth 居中展开。
  */
-export default function CourtGeometry({ format, children }: CourtGeometryProps) {
+export default function CourtGeometry({ format, courtColor, children }: CourtGeometryProps) {
   const area = VALID_AREA[format]
 
   return (
@@ -22,7 +25,7 @@ export default function CourtGeometry({ format, children }: CourtGeometryProps) 
         y={-COURT.halfLength}
         width={COURT.doublesWidth}
         height={COURT.length}
-        fill="#2f7d5e"
+        fill={COURT_COLORS[courtColor].surface}
       />
 
       {/* 当前赛制的有效矩形 */}

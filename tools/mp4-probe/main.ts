@@ -237,7 +237,7 @@ async function encodeReplay(): Promise<EncodedOutput> {
   const canvas = document.createElement('canvas')
   canvas.width = candidate.width
   canvas.height = candidate.height
-  const scene = createReplayScene(canvas, { pixelRatio: 1 })
+  const scene = createReplayScene(canvas, 'green', { pixelRatio: 1 })
   scene.resize(candidate.width, candidate.height)
   if (canvas.width !== candidate.width || canvas.height !== candidate.height) {
     throw new Error(`画布尺寸 ${canvas.width}x${canvas.height} 与目标 ${candidate.width}x${candidate.height} 不一致`)

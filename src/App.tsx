@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { CSSProperties } from 'react'
 import CourtView from './components/CourtView'
 import ExportStatusBar from './components/ExportStatusBar'
 import ReplayPreview from './components/ReplayPreview'
 import type { EditTarget } from './components/CourtView'
+import { COURT_COLORS } from './courtColors'
+import type { CourtColor } from './courtColors'
 import { CONTACT_RADIUS } from './domain/court'
 import type { GroundPoint, MatchFormat } from './domain/court'
 import { MIN_DIRECTION_DISTANCE, buildReplayInput, resolveDirection } from './domain/direction'
@@ -21,6 +24,7 @@ const TARGETS: { value: EditTarget; label: string }[] = [
 
 export default function App() {
   const [format, setFormat] = useState<MatchFormat>('doubles')
+  const [courtColor, setCourtColor] = useState<CourtColor>('green')
   const [landing, setLanding] = useState<GroundPoint>({ x: 2.2, z: 3.2 })
   const [incoming, setIncoming] = useState<GroundPoint | null>(null)
   const [target, setTarget] = useState<EditTarget>('landing')
@@ -29,6 +33,7 @@ export default function App() {
   const [playSignal, setPlaySignal] = useState(0)
   const [pauseSignal, setPauseSignal] = useState(0)
   const exportJob = useExportJob()
+  const palette = COURT_COLORS[courtColor]
 
   const inBounds = isInsideCourt(landing, format)
   const direction = resolveDirection(landing, incoming)
@@ -63,11 +68,17 @@ export default function App() {
   function handleExport() {
     if (!replayInput || exportJob.active) return
     setNotice(null)
-    void exportJob.startExport(replayInput)
+    void exportJob.startExport(replayInput, courtColor)
   }
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      style={{
+        '--court-surround': palette.editorSurround,
+        '--replay-background': palette.background,
+      } as CSSProperties}
+    >
       <header className="app__header">
         <div>
           <h1>羽毛球鹰眼模拟器</h1>
@@ -85,6 +96,21 @@ export default function App() {
               >
                 <span>{item.label}</span>
                 <small>{item.note}</small>
+              </button>
+            ))}
+          </div>
+          <div className="court-colors" role="group" aria-label="地胶颜色">
+            {(Object.keys(COURT_COLORS) as CourtColor[]).map((color) => (
+              <button
+                key={color}
+                type="button"
+                className={color === courtColor ? 'court-colors__button is-active' : 'court-colors__button'}
+                aria-label={`${COURT_COLORS[color].label}地胶`}
+                aria-pressed={color === courtColor}
+                title={COURT_COLORS[color].label}
+                onClick={() => setCourtColor(color)}
+              >
+                <span style={{ backgroundColor: COURT_COLORS[color].surface }} />
               </button>
             ))}
           </div>
@@ -138,6 +164,7 @@ export default function App() {
             <CourtView
               variant="full"
               format={format}
+              courtColor={courtColor}
               landing={landing}
               incoming={incoming}
               target={target}
@@ -205,6 +232,7 @@ export default function App() {
               <CourtView
                 variant="zoom"
                 format={format}
+                courtColor={courtColor}
                 landing={landing}
                 incoming={incoming}
                 target={target}
@@ -280,6 +308,7 @@ export default function App() {
             {replayInput ? (
               <ReplayPreview
                 input={replayInput}
+                courtColor={courtColor}
                 playSignal={playSignal}
                 pauseSignal={pauseSignal}
                 onPlayingChange={setReplayPlaying}

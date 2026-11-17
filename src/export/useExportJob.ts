@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { CourtColor } from '../courtColors'
 import type { ReplayInput } from '../domain/direction'
 import {
   ExportCancelledError,
@@ -69,7 +70,7 @@ export function useExportJob() {
     status.phase === 'finalizing' ||
     status.phase === 'cancelling'
 
-  const startExport = useCallback(async (input: ReplayInput) => {
+  const startExport = useCallback(async (input: ReplayInput, courtColor: CourtColor) => {
     // 同一时间只允许一个导出任务
     if (controllerRef.current) return
     const runId = runIdRef.current + 1
@@ -81,6 +82,7 @@ export function useExportJob() {
     try {
       const result = await exportReplay({
         input,
+        courtColor,
         signal: controller.signal,
         onProgress: (progress) => {
           if (runIdRef.current !== runId) return

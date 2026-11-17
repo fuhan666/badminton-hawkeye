@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
+import type { CourtColor } from '../courtColors'
 import { CONTACT_RADIUS } from '../domain/court'
 import type { GroundPoint, MatchFormat } from '../domain/court'
 import { isNudgeKey, nudgePoint } from '../domain/editing'
@@ -14,6 +15,7 @@ export type EditTarget = 'landing' | 'incoming'
 interface CourtViewProps {
   variant: CourtViewVariant
   format: MatchFormat
+  courtColor: CourtColor
   landing: GroundPoint
   incoming: GroundPoint | null
   target: EditTarget
@@ -43,6 +45,7 @@ function pointFromEvent(svg: SVGSVGElement, event: { clientX: number; clientY: n
 export default function CourtView({
   variant,
   format,
+  courtColor,
   landing,
   incoming,
   target,
@@ -173,7 +176,7 @@ export default function CourtView({
         </marker>
       </defs>
 
-      <CourtGeometry format={format}>
+      <CourtGeometry format={format} courtColor={courtColor}>
         <g pointerEvents="none">
           {showArrow && incoming ? (
             <line

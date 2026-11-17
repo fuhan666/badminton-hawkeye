@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
+import type { CourtColor } from '../courtColors'
 import type { ReplayInput } from '../domain/direction'
 import { REPLAY_DURATION, evaluateReplay } from '../domain/replay'
 import { createReplayScene } from '../replay/scene'
@@ -7,6 +8,7 @@ import type { ReplayScene } from '../replay/scene'
 
 interface ReplayPreviewProps {
   input: ReplayInput
+  courtColor: CourtColor
   /** 顶部播放按钮的请求序号，递增一次即从头播放 */
   playSignal: number
   /** 顶部暂停按钮的请求序号 */
@@ -16,6 +18,7 @@ interface ReplayPreviewProps {
 
 export default function ReplayPreview({
   input,
+  courtColor,
   playSignal,
   pauseSignal,
   onPlayingChange,
@@ -24,6 +27,8 @@ export default function ReplayPreview({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const sceneRef = useRef<ReplayScene | null>(null)
   const timeRef = useRef(0)
+  const colorRef = useRef(courtColor)
+  colorRef.current = courtColor
 
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
@@ -49,7 +54,7 @@ export default function ReplayPreview({
 
     let scene: ReplayScene
     try {
-      scene = createReplayScene(canvas)
+      scene = createReplayScene(canvas, colorRef.current)
     } catch {
       setError('当前浏览器无法创建 WebGL 上下文，三维回放不可用。')
       return
@@ -74,6 +79,14 @@ export default function ReplayPreview({
       sceneRef.current = null
     }
   }, [])
+
+  // 换色只更新材质并补画当前帧，保留时间轴与播放状态。
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+    scene.setCourtColor(courtColor)
+    scene.render(frameRef.current)
+  }, [courtColor])
 
   // 时刻或输入变化时重绘；画面完全由 evaluateReplay 的输出决定
   useEffect(() => {

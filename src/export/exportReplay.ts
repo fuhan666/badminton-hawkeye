@@ -5,6 +5,7 @@ import {
   Mp4OutputFormat,
   Output,
 } from 'mediabunny'
+import type { CourtColor } from '../courtColors'
 import type { ReplayInput } from '../domain/direction'
 import { REPLAY_DURATION, evaluateReplay } from '../domain/replay'
 import { createReplayScene } from '../replay/scene'
@@ -180,7 +181,7 @@ interface BrowserBackendState {
   blob: Blob | null
 }
 
-function createBrowserBackend(input: ReplayInput): ExportBackend {
+function createBrowserBackend(input: ReplayInput, courtColor: CourtColor): ExportBackend {
   const state: BrowserBackendState = {
     canvas: null,
     scene: null,
@@ -204,7 +205,7 @@ function createBrowserBackend(input: ReplayInput): ExportBackend {
       canvas.width = EXPORT_WIDTH
       canvas.height = EXPORT_HEIGHT
       state.canvas = canvas
-      const scene = createReplayScene(canvas, { pixelRatio: 1 })
+      const scene = createReplayScene(canvas, courtColor, { pixelRatio: 1 })
       state.scene = scene
       scene.resize(EXPORT_WIDTH, EXPORT_HEIGHT)
       if (canvas.width !== EXPORT_WIDTH || canvas.height !== EXPORT_HEIGHT) {
@@ -347,6 +348,7 @@ function createBrowserBackend(input: ReplayInput): ExportBackend {
 
 export interface ExportOptions {
   input: ReplayInput
+  courtColor: CourtColor
   signal?: AbortSignal
   onProgress?: (progress: ExportProgress) => void
   /** 测试注入点：默认使用浏览器 WebCodecs 后端 */
@@ -405,7 +407,7 @@ function waitForDequeueOrAbort(
 export async function exportReplay(options: ExportOptions): Promise<ExportResult> {
   const { signal, onProgress } = options
   const input = freezeExportInput(options.input)
-  const backend = options.backend ?? createBrowserBackend(input)
+  const backend = options.backend ?? createBrowserBackend(input, options.courtColor)
 
   let encodedFrames = 0
   const emit = (phase: ExportPhase, frames = encodedFrames) => {

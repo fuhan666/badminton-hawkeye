@@ -135,6 +135,7 @@ describe('exportReplay 帧循环', () => {
     const percents: number[] = []
     const result = await exportReplay({
       input: input(),
+      courtColor: 'green',
       backend: fake.backend,
       onProgress: (progress: ExportProgress) => {
         phases.push(progress.phase)
@@ -166,7 +167,7 @@ describe('exportReplay 取消与清理', () => {
     const controller = new AbortController()
     controller.abort()
     await expect(
-      exportReplay({ input: input(), backend: fake.backend, signal: controller.signal }),
+      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend, signal: controller.signal }),
     ).rejects.toBeInstanceOf(ExportCancelledError)
     expect(fake.stats.started).toBe(0)
     expect(fake.stats.disposed).toBe(1)
@@ -176,7 +177,7 @@ describe('exportReplay 取消与清理', () => {
     const controller = new AbortController()
     const fake = createFakeBackend({ queueSize: 9, onWait: () => controller.abort() })
     await expect(
-      exportReplay({ input: input(), backend: fake.backend, signal: controller.signal }),
+      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend, signal: controller.signal }),
     ).rejects.toBeInstanceOf(ExportCancelledError)
     expect(fake.stats.waits).toBe(1)
     expect(fake.encodedIndices).toHaveLength(1)
@@ -185,7 +186,7 @@ describe('exportReplay 取消与清理', () => {
 
     // 取消后可以在同一输入上重新导出成功
     const retry = createFakeBackend()
-    const result = await exportReplay({ input: input(), backend: retry.backend })
+    const result = await exportReplay({ input: input(), courtColor: 'green', backend: retry.backend })
     expect(result.frames).toBe(EXPORT_FRAME_COUNT)
     expect(retry.stats.finished).toBe(1)
   })
@@ -193,7 +194,7 @@ describe('exportReplay 取消与清理', () => {
   it('编码错误直接冒泡并释放资源', async () => {
     const fake = createFakeBackend({ error: new Error('编码失败') })
     await expect(
-      exportReplay({ input: input(), backend: fake.backend }),
+      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend }),
     ).rejects.toThrow('编码失败')
     expect(fake.stats.finished).toBe(0)
     expect(fake.stats.disposed).toBe(1)
@@ -202,7 +203,7 @@ describe('exportReplay 取消与清理', () => {
   it('封装失败不产出结果并释放资源', async () => {
     const fake = createFakeBackend({ finishError: new Error('封装失败') })
     await expect(
-      exportReplay({ input: input(), backend: fake.backend }),
+      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend }),
     ).rejects.toThrow('封装失败')
     expect(fake.stats.disposed).toBe(1)
   })
@@ -210,7 +211,7 @@ describe('exportReplay 取消与清理', () => {
   it('环境不支持时抛出可读原因，预览不受影响的提示保留', async () => {
     const fake = createFakeBackend({ unsupported: true })
     await expect(
-      exportReplay({ input: input(), backend: fake.backend }),
+      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend }),
     ).rejects.toThrow(/不支持 H\.264 1080p 编码/)
     expect(fake.stats.disposed).toBe(1)
   })

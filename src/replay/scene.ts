@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import { COURT_COLORS } from '../courtColors'
+import type { CourtColor } from '../courtColors'
 import { CONTACT_RADIUS, COURT, LINE } from '../domain/court'
 import type { ReplayFrame } from '../domain/replay'
 
@@ -9,14 +11,12 @@ import type { ReplayFrame } from '../domain/replay'
 
 export interface ReplayScene {
   render(frame: ReplayFrame): void
+  setCourtColor(color: CourtColor): void
   resize(width: number, height: number): void
   dispose(): void
 }
 
 const LINE_COLOR = 0xf8fafc
-const COURT_COLOR = 0x2f7d5e
-const SURROUND_COLOR = 0x33574a
-const BACKGROUND_COLOR = 0x0d1a16
 const MARKER_IN = 0xfbbf24
 const MARKER_OUT = 0xf87171
 
@@ -217,8 +217,10 @@ export interface ReplaySceneOptions {
 
 export function createReplayScene(
   canvas: HTMLCanvasElement,
+  courtColor: CourtColor,
   options: ReplaySceneOptions = {},
 ): ReplayScene {
+  const palette = COURT_COLORS[courtColor]
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
@@ -226,11 +228,12 @@ export function createReplayScene(
     powerPreference: 'high-performance',
   })
   renderer.setPixelRatio(options.pixelRatio ?? Math.min(window.devicePixelRatio || 1, 2))
-  renderer.setClearColor(BACKGROUND_COLOR, 1)
+  renderer.setClearColor(palette.background, 1)
   renderer.outputColorSpace = THREE.SRGBColorSpace
 
   const scene = new THREE.Scene()
-  scene.fog = new THREE.Fog(BACKGROUND_COLOR, 20, 60)
+  const fog = new THREE.Fog(palette.background, 20, 60)
+  scene.fog = fog
 
   const camera = new THREE.PerspectiveCamera(42, 16 / 9, 0.05, 140)
   scene.add(camera)
@@ -247,7 +250,7 @@ export function createReplayScene(
 
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(70, 52),
-    new THREE.MeshStandardMaterial({ color: SURROUND_COLOR, roughness: 1 }),
+    new THREE.MeshStandardMaterial({ color: palette.surround, roughness: 1 }),
   )
   ground.rotation.x = -Math.PI / 2
   ground.position.y = -0.012
@@ -255,7 +258,7 @@ export function createReplayScene(
 
   const surface = new THREE.Mesh(
     new THREE.PlaneGeometry(COURT.doublesWidth, COURT.length),
-    new THREE.MeshStandardMaterial({ color: COURT_COLOR, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({ color: palette.surface, roughness: 0.92 }),
   )
   surface.rotation.x = -Math.PI / 2
   scene.add(surface)
@@ -347,6 +350,14 @@ export function createReplayScene(
     renderer.render(scene, camera)
   }
 
+  function setCourtColor(color: CourtColor) {
+    const next = COURT_COLORS[color]
+    surface.material.color.set(next.surface)
+    ground.material.color.set(next.surround)
+    renderer.setClearColor(next.background, 1)
+    fog.color.set(next.background)
+  }
+
   function resize(width: number, height: number) {
     if (width <= 0 || height <= 0) return
     renderer.setSize(width, height, false)
@@ -368,5 +379,5 @@ export function createReplayScene(
     renderer.dispose()
   }
 
-  return { render, resize, dispose }
+  return { render, setCourtColor, resize, dispose }
 }
