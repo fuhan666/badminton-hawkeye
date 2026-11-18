@@ -16,6 +16,13 @@ export interface Vec3 {
 
 export type ReplaySegment = 'overview' | 'follow' | 'slowmo' | 'result'
 
+export const CAMERA_PRESETS = [
+  { value: 'classic', label: '经典' },
+  { value: 'baseline', label: '底线后方' },
+  { value: 'ground', label: '贴地落点' },
+] as const
+export type CameraPreset = typeof CAMERA_PRESETS[number]['value']
+
 export interface ReplayFrame {
   /** 已夹到 [0, REPLAY_DURATION] 的播放时刻 */
   time: number
@@ -704,7 +711,87 @@ function buildCameraKeys(flight: Flight, format: MatchFormat, aspect: number): C
   return keys
 }
 
-function cameraAt(keys: CameraKey[], time: number): CameraKey {
+const GROUND_CONTACT_PITCH = Math.atan(0.28)
+const GROUND_RESULT_PITCH = 70 * Math.PI / 180
+const GROUND_RISE_END = REPLAY_DURATION - 0.3
+
+/** 保持底线方向，只根据俯角与画幅求取景距离；场线不再决定拍摄方位。 */
+function presetLandingPose(
+  flight: Flight,
+  format: MatchFormat,
+  aspect: number,
+  pitch: number,
+  minDistance = 0,
+): CameraKey {
+  const plan = framingPlan(flight.landing, format, flight.dir)
+  const side = flight.landing.z < 0 ? -1 : 1
+  const outward = { x: 0, y: Math.sin(pitch), z: side * Math.cos(pitch) }
+  const forward = scale(outward, -1)
+  const right = normalize(cross(forward, { x: 0, y: 1, z: 0 }))
+  const up = cross(right, forward)
+  const target = { ...flight.landing, y: 0.02 }
+  const fov = 38
+  const tan = Math.tan(fov * Math.PI / 360)
+  let distance = Math.max(minDistance, 0.44 / outward.y, (0.65 - Math.abs(target.z)) / Math.abs(outward.z))
+  for (const point of focusPoints(flight.landing, plan)) {
+    const rel = sub({ ...point, y: 0 }, target)
+    const depthOffset = dot(rel, outward)
+    distance = Math.max(distance,
+      depthOffset + 0.2,
+      depthOffset + Math.abs(dot(rel, right)) / (tan * aspect * 0.74),
+      depthOffset + Math.abs(dot(rel, up)) / (tan * 0.55),
+    )
+  }
+  return {
+    t: CONTACT_TIME,
+    position: {
+      x: target.x,
+      y: target.y + outward.y * distance,
+      z: target.z + outward.z * distance,
+    },
+    target,
+    fov,
+  }
+}
+
+function buildPresetKeys(flight: Flight, format: MatchFormat, aspect: number, preset: CameraPreset): CameraKey[] {
+  if (preset === 'classic') return buildCameraKeys(flight, format, aspect)
+  const side = flight.landing.z < 0 ? -1 : 1
+  const contact = presetLandingPose(flight, format, aspect, preset === 'ground' ? GROUND_CONTACT_PITCH : Math.PI / 4)
+  const opening = fitAspect({
+    position: {
+      x: flight.landing.x,
+      y: 4.5,
+      z: side * (Math.max(COURT.halfLength, side * flight.start.z, side * flight.landing.z) + 4),
+    },
+    target: { x: flight.landing.x, y: 1, z: 0 },
+  }, aspect)
+  const keys: CameraKey[] = [
+    { t: 0, ...opening, fov: 48 },
+    { t: OVERVIEW_END, ...opening, fov: 48 },
+    {
+      t: FOLLOW_END,
+      position: lerpVec(opening.position, contact.position, preset === 'ground' ? 0.8 : 0.35),
+      target: ballPositionAt(flight, flightProgressAt(FOLLOW_END)),
+      fov: 42,
+    },
+  ]
+  keys.push(contact)
+  if (preset === 'ground') {
+    const distance = Math.hypot(contact.position.y - contact.target.y, contact.position.z - contact.target.z)
+    const overhead = presetLandingPose(flight, format, aspect, GROUND_RESULT_PITCH, distance)
+    keys.push({ ...overhead, t: GROUND_RISE_END }, { ...overhead, t: REPLAY_DURATION })
+  } else {
+    keys.push({ ...contact, t: SLOW_MO_END }, {
+      ...contact,
+      t: REPLAY_DURATION,
+      position: lerpVec(contact.position, contact.target, 0.025),
+    })
+  }
+  return keys
+}
+
+function cameraAt(keys: CameraKey[], time: number, preset: CameraPreset): CameraKey {
   const first = keys[0]
   const last = keys[keys.length - 1]
   if (time <= first.t) return first
@@ -719,6 +806,34 @@ function cameraAt(keys: CameraKey[], time: number): CameraKey {
   if (h <= 0) return k1
 
   const s = (time - k0.t) / h
+  // 新预设逐段缓入缓出；贴地触地后沿固定方位抬升，其余阶段沿关键帧连线推进。
+  if (preset !== 'classic') {
+    const eased = smoothStep(s)
+    if (preset === 'ground' && k0.t === CONTACT_TIME) {
+      // 绕同一落点抬升俯角，保持方位与主体距离，避免直线插值靠近后又拉远。
+      const fromDistance = Math.hypot(k0.position.y - k0.target.y, k0.position.z - k0.target.z)
+      const toDistance = Math.hypot(k1.position.y - k1.target.y, k1.position.z - k1.target.z)
+      const distance = fromDistance + (toDistance - fromDistance) * eased
+      const pitch = GROUND_CONTACT_PITCH + (GROUND_RESULT_PITCH - GROUND_CONTACT_PITCH) * eased
+      const side = k0.position.z > k0.target.z ? 1 : -1
+      return {
+        t: time,
+        position: {
+          x: k0.target.x,
+          y: k0.target.y + Math.sin(pitch) * distance,
+          z: k0.target.z + side * Math.cos(pitch) * distance,
+        },
+        target: k0.target,
+        fov: k0.fov,
+      }
+    }
+    return {
+      t: time,
+      position: lerpVec(k0.position, k1.position, eased),
+      target: lerpVec(k0.target, k1.target, eased),
+      fov: k0.fov + (k1.fov - k0.fov) * eased,
+    }
+  }
   const prev = keys[index - 1] ?? k0
   const next = keys[index + 2] ?? k1
 
@@ -750,15 +865,21 @@ function segmentAt(time: number): ReplaySegment {
 }
 
 /** 计算给定输入与时刻的完整回放状态；纯函数，同一输入同一时刻逐字段相等 */
-export function evaluateReplay(input: ReplayInput, time: number, aspect = BASE_ASPECT): ReplayFrame {
+export function evaluateReplay(input: ReplayInput, time: number, aspect = BASE_ASPECT, preset: CameraPreset = 'classic'): ReplayFrame {
   const clampedTime = clamp(time, 0, REPLAY_DURATION)
   const flight = buildFlight(input)
   const progress = flightProgressAt(clampedTime)
-  const cameraKeys = buildCameraKeys(flight, input.format, aspect)
-  const view = cameraAt(cameraKeys, clampedTime)
+  const cameraKeys = buildPresetKeys(flight, input.format, aspect, preset)
+  const view = cameraAt(cameraKeys, clampedTime, preset)
 
   const landed = clampedTime >= CONTACT_TIME
   const position = landed ? { ...flight.landing } : ballPositionAt(flight, progress)
+  if (preset !== 'classic' && !landed) {
+    // 推进时视线始终跟球，慢放末段逐渐接入落点构图的视点偏移。
+    const contact = cameraAt(cameraKeys, CONTACT_TIME, preset)
+    const offset = scale(sub(contact.target, flight.landing), smoothStep((clampedTime - FOLLOW_END) / (CONTACT_TIME - FOLLOW_END)))
+    view.target = { x: position.x + offset.x, y: position.y + offset.y, z: position.z + offset.z }
+  }
   const forward = landed
     ? ballForwardAt(flight, 1)
     : ballForwardAt(flight, progress)

@@ -139,6 +139,7 @@ describe('exportReplay 帧循环', () => {
     const phases: string[] = []
     const percents: number[] = []
     const result = await exportReplay({
+      cameraPreset: 'classic',
       input: input(),
       palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS,
       backend: fake.backend,
@@ -172,7 +173,7 @@ describe('exportReplay 取消与清理', () => {
     const controller = new AbortController()
     controller.abort()
     await expect(
-      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend, signal: controller.signal }),
+      exportReplay({ cameraPreset: 'classic', input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend, signal: controller.signal }),
     ).rejects.toBeInstanceOf(ExportCancelledError)
     expect(fake.stats.started).toBe(0)
     expect(fake.stats.disposed).toBe(1)
@@ -182,7 +183,7 @@ describe('exportReplay 取消与清理', () => {
     const controller = new AbortController()
     const fake = createFakeBackend({ queueSize: 9, onWait: () => controller.abort() })
     await expect(
-      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend, signal: controller.signal }),
+      exportReplay({ cameraPreset: 'classic', input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend, signal: controller.signal }),
     ).rejects.toBeInstanceOf(ExportCancelledError)
     expect(fake.stats.waits).toBe(1)
     expect(fake.encodedIndices).toHaveLength(1)
@@ -191,7 +192,7 @@ describe('exportReplay 取消与清理', () => {
 
     // 取消后可以在同一输入上重新导出成功
     const retry = createFakeBackend()
-    const result = await exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: retry.backend })
+    const result = await exportReplay({ cameraPreset: 'classic', input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: retry.backend })
     expect(result.frames).toBe(EXPORT_FRAME_COUNT)
     expect(retry.stats.finished).toBe(1)
   })
@@ -199,7 +200,7 @@ describe('exportReplay 取消与清理', () => {
   it('编码错误直接冒泡并释放资源', async () => {
     const fake = createFakeBackend({ error: new Error('编码失败') })
     await expect(
-      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend }),
+      exportReplay({ cameraPreset: 'classic', input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend }),
     ).rejects.toThrow('编码失败')
     expect(fake.stats.finished).toBe(0)
     expect(fake.stats.disposed).toBe(1)
@@ -208,7 +209,7 @@ describe('exportReplay 取消与清理', () => {
   it('封装失败不产出结果并释放资源', async () => {
     const fake = createFakeBackend({ finishError: new Error('封装失败') })
     await expect(
-      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend }),
+      exportReplay({ cameraPreset: 'classic', input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend }),
     ).rejects.toThrow('封装失败')
     expect(fake.stats.disposed).toBe(1)
   })
@@ -216,7 +217,7 @@ describe('exportReplay 取消与清理', () => {
   it('环境不支持时抛出可读原因，预览不受影响的提示保留', async () => {
     const fake = createFakeBackend({ unsupported: true })
     await expect(
-      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend }),
+      exportReplay({ cameraPreset: 'classic', input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend }),
     ).rejects.toThrow(/不支持 H\.264 1080p 编码/)
     expect(fake.stats.disposed).toBe(1)
   })
@@ -237,6 +238,7 @@ describe('自定义导出规格', () => {
       const progress: ExportProgress[] = []
       const settings = { width: 1080, height: 1920, fps }
       const result = await exportReplay({
+        cameraPreset: 'classic',
         input: input(), palette: COURT_COLORS.blue, settings, backend: fake.backend,
         onProgress: (value) => progress.push(value),
       })
@@ -255,7 +257,7 @@ describe('自定义导出规格', () => {
       Object.assign(settings, { width: 1920, height: 1080, fps: 24 })
       source.landing.x = 9
     } })
-    const result = await exportReplay({ input: source, palette: COURT_COLORS.green, settings, backend: fake.backend })
+    const result = await exportReplay({ cameraPreset: 'classic', input: source, palette: COURT_COLORS.green, settings, backend: fake.backend })
     expect(result.frames).toBe(300)
     expect(result.filename).toContain('x3.055-z3.200-720x1280-60fps')
     expect(fake.keyFrames).toEqual([0, 60, 120, 180, 240])

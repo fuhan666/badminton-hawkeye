@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { CourtPalette } from '../courtColors'
 import type { ReplayInput } from '../domain/direction'
+import type { CameraPreset } from '../domain/replay'
 import { REPLAY_DURATION, evaluateReplay } from '../domain/replay'
 import { createReplayScene } from '../replay/scene'
 import type { ReplayScene } from '../replay/scene'
@@ -10,17 +11,20 @@ interface ReplayPreviewProps {
   input: ReplayInput
   palette: CourtPalette
   aspect: number
+  cameraPreset: CameraPreset
 }
 
 export default function ReplayPreview({
   input,
   palette,
   aspect,
+  cameraPreset,
 }: ReplayPreviewProps) {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const sceneRef = useRef<ReplayScene | null>(null)
   const timeRef = useRef(0)
+  const animationRef = useRef(0)
   const colorRef = useRef(palette)
   colorRef.current = palette
 
@@ -29,7 +33,7 @@ export default function ReplayPreview({
   const [runId, setRunId] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
-  const frame = useMemo(() => evaluateReplay(input, time, aspect), [input, time, aspect])
+  const frame = useMemo(() => evaluateReplay(input, time, aspect, cameraPreset), [input, time, aspect, cameraPreset])
   const frameRef = useRef(frame)
   frameRef.current = frame
 
@@ -87,12 +91,13 @@ export default function ReplayPreview({
     sceneRef.current?.render(frame)
   }, [frame])
 
-  // 落点、方向、赛制或高度变化后回零并暂停，用新的输入重新开始
+  // 落点、方向、赛制、高度或镜头预设变化后回零并暂停，用新的输入重新开始
   useEffect(() => {
+    cancelAnimationFrame(animationRef.current)
     timeRef.current = 0
     setTime(0)
     setPlaying(false)
-  }, [input])
+  }, [input, cameraPreset])
 
   // 播放推进：rAF 只负责把真实时间换算成绝对播放秒数，不做逐帧积分
   useEffect(() => {
@@ -103,7 +108,6 @@ export default function ReplayPreview({
       setTime(0)
     }
     const startStamp = performance.now()
-    let handle = 0
 
     const tick = (now: number) => {
       const next = from + (now - startStamp) / 1000
@@ -115,11 +119,11 @@ export default function ReplayPreview({
       }
       timeRef.current = next
       setTime(next)
-      handle = requestAnimationFrame(tick)
+      animationRef.current = requestAnimationFrame(tick)
     }
 
-    handle = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(handle)
+    animationRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(animationRef.current)
   }, [playing, runId])
 
   function handleSeek(event: ChangeEvent<HTMLInputElement>) {

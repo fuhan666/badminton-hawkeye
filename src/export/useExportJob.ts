@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CourtPalette } from '../courtColors'
 import type { ExportSettings } from './exportSettings'
+import type { CameraPreset } from '../domain/replay'
 import { REPLAY_DURATION } from '../domain/replay'
 import type { ReplayInput } from '../domain/direction'
 import {
@@ -63,7 +64,7 @@ export function useExportJob() {
     status.phase === 'finalizing' ||
     status.phase === 'cancelling'
 
-  const startExport = useCallback(async (input: ReplayInput, palette: CourtPalette, settings: ExportSettings) => {
+  const startExport = useCallback(async (input: ReplayInput, palette: CourtPalette, settings: ExportSettings, cameraPreset: CameraPreset) => {
     // 同一时间只允许一个导出任务
     if (controllerRef.current) return
     const runId = runIdRef.current + 1
@@ -77,6 +78,7 @@ export function useExportJob() {
         input,
         palette,
         settings,
+        cameraPreset,
         signal: controller.signal,
         onProgress: (progress) => {
           if (runIdRef.current !== runId) return

@@ -9,6 +9,7 @@ import type { CourtPalette } from '../courtColors'
 import { buildEncoderConfig } from './exportSettings'
 import type { ExportSettings } from './exportSettings'
 import type { ReplayInput } from '../domain/direction'
+import type { CameraPreset } from '../domain/replay'
 import { REPLAY_DURATION, evaluateReplay } from '../domain/replay'
 import { createReplayScene } from '../replay/scene'
 import type { ReplayScene } from '../replay/scene'
@@ -160,7 +161,7 @@ interface BrowserBackendState {
   blob: Blob | null
 }
 
-function createBrowserBackend(input: ReplayInput, palette: CourtPalette, settings: ExportSettings): ExportBackend {
+function createBrowserBackend(input: ReplayInput, palette: CourtPalette, settings: ExportSettings, cameraPreset: CameraPreset): ExportBackend {
   const config = buildEncoderConfig(settings)
   const { width, height, fps } = settings
   const state: BrowserBackendState = {
@@ -232,7 +233,7 @@ function createBrowserBackend(input: ReplayInput, palette: CourtPalette, setting
     renderFrame(index) {
       const scene = state.scene
       if (!scene) throw new Error('导出场景尚未创建')
-      scene.render(evaluateReplay(input, index / fps, width / height))
+      scene.render(evaluateReplay(input, index / fps, width / height, cameraPreset))
     },
 
     encodeFrame(index, keyFrame) {
@@ -328,6 +329,7 @@ function createBrowserBackend(input: ReplayInput, palette: CourtPalette, setting
 }
 
 export interface ExportOptions {
+  cameraPreset: CameraPreset
   input: ReplayInput
   palette: CourtPalette
   settings: ExportSettings
@@ -387,13 +389,13 @@ function waitForDequeueOrAbort(
  * 取消时停止送帧并丢弃封装结果，成功时返回可下载的 MP4 Blob。
  */
 export async function exportReplay(options: ExportOptions): Promise<ExportResult> {
-  const { signal, onProgress } = options
+  const { signal, onProgress, cameraPreset } = options
   const input = freezeExportInput(options.input)
   const settings = { ...options.settings }
   const palette = { ...options.palette }
   buildEncoderConfig(settings)
   const totalFrames = Math.round(settings.fps * REPLAY_DURATION)
-  const backend = options.backend ?? createBrowserBackend(input, palette, settings)
+  const backend = options.backend ?? createBrowserBackend(input, palette, settings, cameraPreset)
 
   let encodedFrames = 0
   const emit = (phase: ExportPhase, frames = encodedFrames) => {

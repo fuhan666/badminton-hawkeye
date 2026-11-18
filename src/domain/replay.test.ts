@@ -313,7 +313,7 @@ describe('时间越界', () => {
 /** 把地面点投到画面归一化坐标，用于检查近景构图；与渲染层的针孔相机一致 */
 function projectNdc(
   camera: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number }; fov: number },
-  point: { x: number; z: number },
+  point: { x: number; y?: number; z: number },
   aspect = 16 / 9,
 ) {
   const forward = {
@@ -331,7 +331,7 @@ function projectNdc(
     y: r.z * f.x - r.x * f.z,
     z: r.x * f.y - r.y * f.x,
   }
-  const rel = { x: point.x - camera.position.x, y: -camera.position.y, z: point.z - camera.position.z }
+  const rel = { x: point.x - camera.position.x, y: (point.y ?? 0) - camera.position.y, z: point.z - camera.position.z }
   const depth = rel.x * f.x + rel.y * f.y + rel.z * f.z
   const tan = Math.tan((camera.fov * Math.PI) / 360)
   return {
@@ -504,4 +504,110 @@ describe('横竖画幅构图', () => {
       }
     })
   }
+})
+
+describe('镜头预设', () => {
+  const presets = ['classic', 'baseline', 'ground'] as const
+  it('预设只改变相机，同一时刻的球路、印记和判定完全一致', () => {
+    for (const time of [0, 0.8, 2, 2.8, CONTACT_TIME, 3.6, 5]) {
+      const { camera: _, ...expected } = evaluateReplay(CROSS_NET, time)
+      for (const preset of presets) {
+        const { camera: __, ...actual } = evaluateReplay(CROSS_NET, time, 16 / 9, preset)
+        expect(actual).toEqual(expected)
+      }
+    }
+    expect(evaluateReplay(CROSS_NET, 0, 16 / 9, 'baseline').camera.position.z).toBeGreaterThan(COURT.halfLength)
+    const ground = evaluateReplay(CROSS_NET, CONTACT_TIME, 16 / 9, 'ground').camera
+    const horizontal = Math.hypot(ground.position.x - ground.target.x, ground.position.z - ground.target.z)
+    expect((ground.position.y - ground.target.y) / horizontal).toBeCloseTo(0.28)
+  })
+
+  it.each(['baseline', 'ground'] as const)('%s：横竖屏、四角及近网落点全程净空，触地与定格保留场线', (preset) => {
+    for (const aspect of [16 / 9, 9 / 20]) {
+      for (const landing of [...FRAMING_SCENES.map((scene) => scene.landing), { x: 0, z: 0 }, { x: 0, z: 0.01 }, { x: 0, z: 0.6 }]) {
+        for (const side of [-1, 1]) {
+          const replay = input({ x: landing.x * side, z: landing.z * side }, { x: 0, z: -3 * side })
+          let previous = evaluateReplay(replay, 0, aspect, preset).camera.position
+          for (let time = 0; time <= 5; time += 0.025) {
+            const frame = evaluateReplay(replay, time, aspect, preset)
+            const p = frame.camera.position
+            // 机位沿底线到落点的纵向平面推进，不因最近场线换到侧面。
+            expect(p.x).toBeCloseTo(replay.landing.x, 10)
+            expect(p.y).toBeGreaterThan(0.4)
+            expect(Math.hypot(p.x - previous.x, p.y - previous.y, p.z - previous.z)).toBeLessThan(2)
+            expect(Math.abs(p.z) > 0.3 || Math.abs(p.x) > COURT.doublesHalfWidth + 0.15 || p.y > COURT.netPostHeight + 0.06).toBe(true)
+            if (time < CONTACT_TIME) {
+              const ball = projectNdc(frame.camera, frame.ball.position, aspect)
+              expect(Math.abs(ball.x)).toBeLessThan(0.9)
+              expect(Math.abs(ball.y)).toBeLessThan(0.9)
+            }
+            previous = p
+          }
+        }
+      }
+      for (const scene of FRAMING_SCENES) {
+        const replay = input(scene.landing, { x: scene.landing.x, z: -3.2 })
+        for (let time = CONTACT_TIME; time <= REPLAY_DURATION; time += 0.025) {
+          const frame = evaluateReplay(replay, time, aspect, preset)
+          for (const point of [scene.landing, ...scene.lines()]) {
+            const ndc = projectNdc(frame.camera, point, aspect)
+            expect(Math.abs(ndc.x)).toBeLessThan(0.98)
+            expect(ndc.y).toBeLessThan(0.98)
+            expect(ndc.y).toBeGreaterThan(-0.8)
+          }
+        }
+      }
+    }
+  })
+
+  it('底线后方从跟随到定格保持同一侧，镜头直接向下聚焦落点', () => {
+    for (const side of [-1, 1]) {
+      const replay = input({ x: side * 3.055, z: side * 3.2 }, { x: 0, z: -side * 3.2 })
+      const opening = evaluateReplay(replay, 0, 16 / 9, 'baseline').camera
+      const contact = evaluateReplay(replay, CONTACT_TIME, 16 / 9, 'baseline').camera
+      const result = evaluateReplay(replay, REPLAY_DURATION, 16 / 9, 'baseline').camera
+      expect(side * opening.position.z).toBeGreaterThan(COURT.halfLength)
+      for (const camera of [opening, contact, result]) {
+        expect(camera.position.x).toBe(replay.landing.x)
+        expect(side * (camera.position.z - replay.landing.z)).toBeGreaterThan(0)
+      }
+      expect(contact.target.x).toBe(replay.landing.x)
+      expect(contact.target.z).toBe(replay.landing.z)
+      expect(result.target.x).toBeCloseTo(contact.target.x, 10)
+      expect(result.target.y).toBeCloseTo(contact.target.y, 10)
+      expect(result.target.z).toBeCloseTo(contact.target.z, 10)
+      expect(side * contact.position.z).toBeLessThan(side * opening.position.z)
+    }
+  })
+
+  it.each([16 / 9, 9 / 20])('%s：贴地触地后持续升高到俯拍，方位不变，最后停稳', (aspect) => {
+    for (const format of ['singles', 'doubles'] as const) {
+      for (const landing of [{ x: 3.055, z: 6.705 }, { x: -2.59, z: -3.2 }, { x: 0, z: 0.01 }]) {
+        const replay = input(landing, { x: 0, z: -3.2 }, format)
+        const contact = evaluateReplay(replay, CONTACT_TIME, aspect, 'ground').camera
+        let previousHeight = contact.position.y
+        let previousPitch = 0
+        for (let time = CONTACT_TIME; time <= REPLAY_DURATION; time += 0.02) {
+          const camera = evaluateReplay(replay, time, aspect, 'ground').camera
+          const pitch = Math.atan2(camera.position.y - camera.target.y, Math.abs(camera.position.z - camera.target.z))
+          expect(camera.position.y).toBeGreaterThanOrEqual(previousHeight - 1e-10)
+          expect(pitch).toBeGreaterThanOrEqual(previousPitch - 1e-10)
+          expect(camera.position.x).toBe(landing.x)
+          expect(camera.target.x).toBeCloseTo(contact.target.x, 10)
+          expect(camera.target.y).toBeCloseTo(contact.target.y, 10)
+          expect(camera.target.z).toBeCloseTo(contact.target.z, 10)
+          expect(Math.sign(camera.position.z - camera.target.z)).toBe(Math.sign(contact.position.z - contact.target.z))
+          previousHeight = camera.position.y
+          previousPitch = pitch
+        }
+        expect(previousHeight).toBeGreaterThan(contact.position.y)
+        expect(previousPitch * 180 / Math.PI).toBeCloseTo(70, 8)
+        const stopped = evaluateReplay(replay, 4.7, aspect, 'ground').camera
+        const end = evaluateReplay(replay, 5, aspect, 'ground').camera
+        expect(stopped.position.x).toBeCloseTo(end.position.x, 10)
+        expect(stopped.position.y).toBeCloseTo(end.position.y, 10)
+        expect(stopped.position.z).toBeCloseTo(end.position.z, 10)
+      }
+    }
+  })
 })

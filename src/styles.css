@@ -683,3 +683,22 @@ h2 {
 .palette-field__hex:invalid {
   border-color: #b91c1c;
 }
+
+.replay-camera {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.replay-camera select {
+  min-width: 120px;
+  padding: 6px 28px 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}

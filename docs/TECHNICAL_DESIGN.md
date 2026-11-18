@@ -58,17 +58,19 @@ TypeScript、React 和 Vite 构成应用；SVG 负责球场编辑，Three.js 负
 
 ## 三维回放
 
-[replay.ts](../src/domain/replay.ts) 的 `evaluateReplay(input, time, aspect)` 根据输入、绝对时刻和宽高比返回球体、镜头、印记与判定状态。同一组输入得到相同结果，时间限制在 0–5 秒。
+[replay.ts](../src/domain/replay.ts) 的 `evaluateReplay(input, time, aspect, preset)` 根据输入、绝对时刻、宽高比和镜头预设返回球体、镜头、印记与判定状态。同一组输入得到相同结果，时间限制在 0–5 秒。
 
-分镜为 0–0.8 秒全景、0.8–2.0 秒跟随、2.0–3.6 秒慢放、3.6–5.0 秒定格，触地时刻为 3.2 秒。球体原点位于球托底端，触地后直接取 `(landing.x, 0, landing.z)`；印记半径始终取 `CONTACT_RADIUS`。
+分镜为 0–0.8 秒开场、0.8–2.0 秒跟随或推进、2.0–3.6 秒慢放、3.6–5.0 秒判定展示，触地时刻为 3.2 秒。球体原点位于球托底端，触地后直接取 `(landing.x, 0, landing.z)`；印记半径始终取 `CONTACT_RADIUS`。
 
 球路由关键时刻的飞行进度求值，水平长度为 4.2 m。`FLIGHT_HEIGHTS` 定义低／中／高为 1.7／2.5／4.0 m：跨网片段按网面交点设置高度参照，未跨网片段取进度 0.5；起点恰在网面时直接使用所选高度。通常起始高度为 2.5 m，两段二次曲线经高度参照点落到地面，并共用参照点切线；低档连续下降，中、高档在参照点收平后下落。球体朝向取轨迹解析切线。
 
-相机关键帧用 Hermite 插值衔接。近景根据落点选择参照线，再依据宽高比求机位距离；全景与跟随机位适配窄画幅。具体构图参数由 `replay.ts` 维护。
+经典预设的相机关键帧用 Hermite 插值衔接，沿用根据落点选择拍摄方位和参照线的构图。
+
+底线后方和贴地落点预设沿落点所在的纵向平面用 smoothstep 插值推进，飞行期间视线跟球；`presetLandingPose` 根据俯角与宽高比解析求距离，覆盖落点和参照线，场线只影响取景距离。贴地预设在 3.2–4.7 秒按同一水平方位插值俯角与视点距离，从约 16° 平滑抬升到约 70°，随后保持到结束。全景与跟随机位适配窄画幅，具体构图参数由 `replay.ts` 维护。
 
 [scene.ts](../src/replay/scene.ts) 将回放状态应用到球体、相机、印记和结果牌。印记置于白线之上以显示重叠关系；结果牌挂在相机下方，尺寸同时受横向和纵向画幅约束。
 
-[ReplayPreview](../src/components/ReplayPreview.tsx) 用 `requestAnimationFrame` 换算播放时刻，拖动时间轴时暂停。赛制、选点或高度变化后回零；换色和改变画幅保留播放位置。高度由 App 管理，初始为中档。预览按目标比例缩放，高度上限为 480 px。
+[ReplayPreview](../src/components/ReplayPreview.tsx) 用 `requestAnimationFrame` 换算播放时刻，拖动时间轴时暂停。赛制、选点、高度或镜头预设变化后回零；换色和改变画幅保留播放位置。高度与镜头预设由 App 管理，初始为中档和经典；镜头预设通过 useExportJob 传入 exportReplay，在导出开始时保存为本次任务的值。预览按目标比例缩放，高度上限为 480 px。
 
 ## 视频导出
 
@@ -114,4 +116,4 @@ TypeScript、React 和 Vite 构成应用；SVG 负责球场编辑，Three.js 负
 
 `tools/mp4-probe/run-probe.mjs` 和 `tools/export-smoke/run-export-smoke.mjs` 使用 macOS 的 Chrome／Edge 路径，启动独立无头浏览器与 Vite。`--browser edge` 选择 Edge，`--port` 修改端口；默认分别为 5199 和 5201。
 
-每次运行会重建各自的 `out/` 目录，输出报告、截图和视频。该目录被 Git 忽略，需保留的验收结果写入[验收记录](ACCEPTANCE.md)，样片存入 `docs/media/`。
+每次运行会重建各自的 `out/` 目录，输出报告、截图和视频。该目录被 Git 忽略。

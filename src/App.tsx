@@ -13,6 +13,8 @@ import type { GroundPoint, MatchFormat } from './domain/court'
 import { buildReplayInput, resolveDirection } from './domain/direction'
 import type { FlightHeight } from './domain/direction'
 import { isInsideCourt } from './domain/judgement'
+import { CAMERA_PRESETS } from './domain/replay'
+import type { CameraPreset } from './domain/replay'
 import { useExportJob } from './export/useExportJob'
 
 const FORMATS: { value: MatchFormat; label: string }[] = [
@@ -33,6 +35,7 @@ const HEIGHTS: { value: FlightHeight; label: string }[] = [
 
 export default function App() {
   const [format, setFormat] = useState<MatchFormat>('doubles')
+  const [cameraPreset, setCameraPreset] = useState<CameraPreset>('classic')
   const [flightHeight, setFlightHeight] = useState<FlightHeight>('medium')
   const [settings, setSettings] = useAppSettings()
   const [landing, setLanding] = useState<GroundPoint>({ x: 2.2, z: 3.2 })
@@ -61,7 +64,7 @@ export default function App() {
 
   function handleExport() {
     if (!replayInput || exportJob.active) return
-    void exportJob.startExport(replayInput, palette, settings.export)
+    void exportJob.startExport(replayInput, palette, settings.export, cameraPreset)
   }
 
   return (
@@ -240,8 +243,14 @@ export default function App() {
                 </div>
               </div>
             </div>
+            <label className="replay-camera">
+              <span>镜头</span>
+              <select aria-label="镜头预设" value={cameraPreset} onChange={(event) => setCameraPreset(event.target.value as CameraPreset)}>
+                {CAMERA_PRESETS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
             {replayInput ? (
-              <ReplayPreview input={replayInput} palette={palette} aspect={aspect} />
+              <ReplayPreview input={replayInput} palette={palette} aspect={aspect} cameraPreset={cameraPreset} />
             ) : (
               <div
                 className={direction.issue === 'coincident' ? 'replay__empty replay__empty--invalid' : 'replay__empty'}
