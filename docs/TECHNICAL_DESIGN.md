@@ -1,226 +1,115 @@
 # 技术方案
 
-采用本地运行的纯前端应用，场景渲染与视频生成均在浏览器完成。
+TypeScript、React 和 Vite 构成应用；SVG 负责球场编辑，Three.js 负责回放，WebCodecs 编码视频，Mediabunny 封装 MP4。
 
-建议技术栈：TypeScript、React、SVG、Three.js、WebCodecs 和 MP4 封装库。实现围绕球场编辑、三维回放和视频导出组织。
+## 模块与数据流
 
-## 数据流
-
-屏幕选点 → 球场坐标 → 落点圆心与归一化来球方向 → 判定与动画 → 预览或逐帧编码 → MP4。
-
-球场尺寸、白线和接触圆共用一份几何数据。来球方向为 `(落点 - 来向点)` 的单位向量。
-
-## 球场与判定
-
-### 尺寸来源与测量基准
-
-尺寸取自已核对的 BWF《Laws of Badminton》Section 4.1 现行版（In Force 26/04/2025，Version 5.0 (2)）规则 1.1、1.3、1.4、1.5、1.10 及 Diagram A：
-
-- 规则 1.1：球场为矩形，界线宽 40 mm。
-- 规则 1.3：所有线属于其所界定的区域（All the lines shall form part of the area which they define）。因此长度、宽度和各线位置一律量至**线外沿**，白线计入有效区域。
-- 规则 1.4、1.5：网柱高 1.55 m，立在双打边线上，单打与双打相同，网柱及支撑不得伸入场内。
-- 规则 1.10：网中央高 1.524 m，双打边线上方 1.55 m。
-- Diagram A：标注总长 13.400 m、双打宽 6.100 m；半场纵向链式尺寸为 40 / 720 / 40 / 3 880 / 40 / 1 980 mm，横向为 40 / 420 / 40 / 2 530 / 40 / 2 530 / 40 / 420 / 40 mm；图注给出对角线 14.723 m，与 √(13.40² + 6.10²) = 14.723 m 一致，可作为尺寸自洽校验。
-
-来源：
-
-- BWF 法规目录：<https://corporate.bwfbadminton.com/statutes/>
-- [现行规则及 Diagram A](<https://extranet.bwf.sport/docs/document-system/81/1466/1470/Section%204.1%20-%20Laws%20of%20Badminton%20-%2026%20April%202025%20V5.0%20%282%29%20.pdf>)
-
-由 Diagram A 的链式尺寸可推出两处易错口径：双打后发球线靠端线一侧的边缘距端线外沿 0.76 m（40 mm 端线 + 720 mm 净空 + 40 mm 后发球线），两线之间的**净空是 0.72 m**；前发球线靠网一侧的边缘距网 1.98 m。首版只判定单打/双打完整矩形，两条发球线仅作场内参照，发球区判定不在范围内。
-
-### 坐标约定
-
-原点为球网与场地中线交点的地面点，x 轴沿边线方向、z 轴沿场地长轴方向、y 轴竖直向上，单位米。俯视图 +x 向右、+z 向下，网位于 z = 0。全场与局部精调共用这一米制坐标，只改变缩放系数。
-
-### 常量清单
-
-| 项目 | 数值 (m) | 说明 |
-| --- | --- | --- |
-| 场地长 / 半长 | 13.40 / 6.70 | 量至端线外沿 |
-| 双打宽 / 半宽 | 6.10 / 3.05 | 量至双打边线外沿 |
-| 单打宽 / 半宽 | 5.18 / 2.59 | 量至单打边线外沿 |
-| 线宽 | 0.04 | 所有界线 |
-| 前发球线 | 1.98 | 靠网一侧边缘距网 |
-| 双打后发球线 | 0.76 | 靠端线一侧边缘距端线外沿 |
-| 网柱高 / 网中央高 | 1.55 / 1.524 | 网柱沿双打边线 |
-| 接触半径 | 0.013 | 模拟参数，初始建议，待样片确认 |
-
-```ts
-export const COURT = {
-  length: 13.4,
-  halfLength: 6.7,
-  doublesWidth: 6.1,
-  doublesHalfWidth: 3.05,
-  singlesWidth: 5.18,
-  singlesHalfWidth: 2.59,
-  lineWidth: 0.04,
-  shortServiceLineFromNet: 1.98,
-  doublesLongServiceLineFromBackLine: 0.76,
-  netPostHeight: 1.55,
-  netCentreHeight: 1.524,
-} as const;
-
-export const VALID_AREA = {
-  doubles: { halfWidth: 3.05, halfLength: 6.7 },
-  singles: { halfWidth: 2.59, halfLength: 6.7 },
-} as const;
-
-/** 模拟接触半径，初始建议，待样片确认 */
-export const CONTACT_RADIUS = 0.013;
-```
-
-### 线带
-
-有效矩形是外沿区间，白线整条落在其中。绘制与命中检测需要的线带（正方向，负方向镜像）：
-
-| 线 | 区间 | 中心线 |
-| --- | --- | --- |
-| 双打边线 | x ∈ [3.01, 3.05] | x = ±3.03 |
-| 单打边线 | x ∈ [2.55, 2.59] | x = ±2.57 |
-| 端线 | z ∈ [6.66, 6.70] | z = ±6.68 |
-| 前发球线 | z ∈ [1.98, 2.02] | z = ±2.00 |
-| 双打后发球线 | z ∈ [5.90, 5.94] | z = ±5.92 |
-
-用居中描边绘制时必须以中心线为路径，否则白线会整体外扩 0.02 m，判定边界随之偏移。
-
-### 判定
-
-有效矩形 `x ∈ [-W/2, W/2]`、`z ∈ [-6.7, 6.7]`，W 取双打 6.10 或单打 5.18。对圆心 P 求矩形上的最近点 C，`|P - C|² ≤ r²` 为 IN，否则 OUT。相切算 IN；角落按到角点的距离判定，不能用「向两个轴各扩 r」的矩形替代圆角，否则四个角会误判为界内。
-
-| 案例 | 结果 |
+| 入口 | 职责 |
 | --- | --- |
-| P = (3.063, 0)，双打 | 最近点 (3.05, 0)，距离 0.013，相切，IN |
-| P = (3.064, 0)，双打 | 距离 0.014，OUT |
-| P = (3.060, 6.710)，双打角落 | 最近点 (3.05, 6.70)，距离 ≈ 0.014142，OUT |
-| P = (2.70, 0) | 单打：距单打边线 0.11，OUT；双打：圆心已在有效区内，IN |
-| P = (2.595, 0) | 单打：距外沿 0.005，压在单打边线上，IN；双打 IN |
+| [App.tsx](../src/App.tsx) | 赛制、选点、配置状态与导出调用 |
+| [domain/](../src/domain/) | 球场几何、判定、坐标、方向与回放计算 |
+| [components/](../src/components/) | SVG 编辑器、设置控件、预览与进度界面 |
+| [replay/scene.ts](../src/replay/scene.ts) | 三维场景、材质、结果牌和资源释放 |
+| [export/](../src/export/) | 导出参数、编码、封装、任务状态与下载 |
+| [settings/](../src/settings/) | 浏览器配置校验、读取与保存 |
 
-比较用带容差的形式（如 `|P - C| ≤ r + 1e-9`）：`3.063 - 3.05` 在双精度下等于 `0.013000000000000012`，直接与 0.013 比较会把相切误判为出界。
+选点从屏幕坐标转换为米制坐标，再生成落点、判定和单位来球方向。回放计算接收选点、时间与宽高比，预览和导出共用计算结果及场景实现。配色由 App 传给 SVG、CSS、三维场景和导出任务。
 
-SVG 负责全场选点和局部精调，两者用同一份米制数据与坐标变换保持缩放前后的落点一致；局部视图按真实比例显示接触圆与白线，全场图只放大交互手柄、不改变半径。
+## 球场几何
+
+尺寸依据 BWF《Laws of Badminton》2025-04-26 版的规则 1.1、1.3–1.5、1.10 与 Diagram A。规则来源：[法规目录](https://corporate.bwfbadminton.com/statutes/)、[规则文件](https://extranet.bwf.sport/docs/document-system/81/1466/1470/Section%204.1%20-%20Laws%20of%20Badminton%20-%2026%20April%202025%20V5.0%20%282%29%20.pdf)。
+
+原点为球网与中线交点的地面位置。X 沿球场宽度，Z 沿球场长度，Y 竖直向上；俯视图 +X 向右、+Z 向下，球网位于 Z = 0。数据单位为米，尺寸量至场线外沿，场线计入有效区域。
+
+常量定义于 [court.ts](../src/domain/court.ts)：
+
+| 项目 | 数值 |
+| --- | --- |
+| 场地长／半长 | 13.40／6.70 m |
+| 双打宽／半宽 | 6.10／3.05 m |
+| 单打宽／半宽 | 5.18／2.59 m |
+| 线宽 | 0.04 m |
+| 前发球线靠网边缘距网 | 1.98 m |
+| 双打后发球线靠端线边缘距端线外沿 | 0.76 m |
+| 网柱高／网中央高 | 1.55／1.524 m |
+| 接触半径 | 0.013 m，模拟参数 |
+
+场线按中心线绘制，正方向线带如下，负方向镜像：
+
+| 场线 | 线带区间（m） | 中心线（m） |
+| --- | --- | --- |
+| 双打边线 | X ∈ [3.01, 3.05] | X = 3.03 |
+| 单打边线 | X ∈ [2.55, 2.59] | X = 2.57 |
+| 端线 | Z ∈ [6.66, 6.70] | Z = 6.68 |
+| 前发球线 | Z ∈ [1.98, 2.02] | Z = 2.00 |
+| 双打后发球线 | Z ∈ [5.90, 5.94] | Z = 5.92 |
+
+双打端线与后发球线之间的净空为 0.72 m。居中描边必须使用中心线位置，以保持白线外沿与判定边界一致。
+
+[viewport.ts](../src/domain/viewport.ts) 定义全场窗口及局部 0.24×0.17 m 窗口。[CourtView](../src/components/CourtView.tsx) 将指针坐标映射到 SVG 米制坐标，局部拖动期间固定视窗以避免重居中跳动；手柄尺寸与接触半径分别绘制。[editing.ts](../src/domain/editing.ts) 负责 1 mm／10 mm 键盘微调及范围限制。
+
+## 判定与方向
+
+[judgement.ts](../src/domain/judgement.ts) 对圆心 P 求有效矩形上的最近点 C，以 `distance(P, C) <= CONTACT_RADIUS + 1e-9` 判 IN，否则判 OUT。角落使用到角点的欧氏距离，容差单位为米。
+
+有效矩形为 `X ∈ [-W/2, W/2]`、`Z ∈ [-6.7, 6.7]`，W 由赛制决定。双打落点 `(3.063, 0)` 与外沿相切判 IN，`(3.064, 0)` 判 OUT；角落 `(3.060, 6.710)` 到边界距离约 0.014142 m，判 OUT。
+
+[direction.ts](../src/domain/direction.ts) 生成 `normalize(landing - incoming)`。来向点缺失或两点距离小于 0.01 m 时返回无效方向；有效时生成 `ReplayInput { format, landing, direction }`。回放输入只保留单位方向，因此沿同一射线调整来向点距离会得到相同回放。
 
 ## 三维回放
 
-### 确定性内核
+[replay.ts](../src/domain/replay.ts) 的 `evaluateReplay(input, time, aspect)` 根据输入、绝对时刻和宽高比返回球体、镜头、印记与判定状态。同一组输入得到相同结果，时间限制在 0–5 秒。
 
-`src/domain/replay.ts` 导出 `evaluateReplay(input, time, aspect)`，输入为既有的 `ReplayInput { format, landing, direction }`，输出是普通对象：
+分镜为 0–0.8 秒全景、0.8–2.0 秒跟随、2.0–3.6 秒慢放、3.6–5.0 秒定格，触地时刻为 3.2 秒。球体原点位于球托底端，触地后直接取 `(landing.x, 0, landing.z)`；印记半径始终取 `CONTACT_RADIUS`。
 
-```ts
-interface ReplayFrame {
-  time: number                 // 夹到 [0, 5]
-  flightProgress: number       // 0–1，触地后恒为 1
-  segment: 'overview' | 'follow' | 'slowmo' | 'result'
-  ball: { position: Vec3; forward: Vec3; opacity: number }
-  marker: { center: Vec3; radius: number; opacity: number }
-  camera: { position: Vec3; target: Vec3; fov: number }
-  verdict: 'IN' | 'OUT'
-  resultOpacity: number
-}
-```
+球路由关键时刻的飞行进度求值，朝向取轨迹切线。跨网轨迹计算抬升高度；相机关键帧用 Hermite 插值衔接。近景根据落点选择参照线，再依据宽高比求机位距离；全景与跟随机位适配窄画幅。具体构图参数由 `replay.ts` 维护。
 
-内核不读时钟、随机数、帧率或上一帧结果，时间先夹到有效区间，因此相同输入与时刻逐字段相等。渲染层不得自行积分球路或追赶目标。
+[scene.ts](../src/replay/scene.ts) 将回放状态应用到球体、相机、印记和结果牌。印记置于白线之上以显示重叠关系；结果牌挂在相机下方，尺寸同时受横向和纵向画幅约束。
 
-### 时间与球路
-
-总长 5 s，触地 3.2 s。飞行进度用单调三次插值从关键帧 (0 s, 0) → (0.8 s, 0.24) → (2.0 s, 0.68) → (3.2 s, 1) 求出，前三段逐段加速、最后一段最慢，形成慢放。水平位置按进度线性推进；高度为线性下降加一项正弦抬升，抬升量按跨网处目标净高 1.9 m 解析求出，并受 6 m 上限约束。未跨网的输入不加抬升，仍可回放。
-
-球托底端在进度 1 处直接取落点圆心，不再插值，因此 `ball.position` 在 3.2 s 之后精确等于 `(landing.x, 0, landing.z)`。朝向取曲线解析切线；触地后退化为末段方向。
-
-### 模型原点与场景
-
-球体局部原点是球托底端，羽毛沿纵轴向后，飞行前向为局部 +Z；姿态只改变朝向，不挪动接触原点。`src/replay/scene.ts` 只做搬运：按帧设置球体位置与朝向、镜头位姿与 FOV、印记透明度与颜色、结果牌透明度。白线用薄面几何按 `LINE` 中心线布置，外沿不偏移；球网按网柱 1.55 m、中央 1.524 m 的曲线建立网格。
-
-### 分镜与结果
-
-四段为 0–0.8 s 全景、0.8–2.0 s 跟随、2.0–3.6 s 慢放触地、3.6–5.0 s 印记定格。相机关键帧在段边界完全共享，段间用三次 Hermite 过渡，位置、视点与 FOV 连续；跟随段采用相对球体固定的机位，整段构图稳定。
-
-慢放段在 3.2 s 触地时刻就到达近景构图，此后到 5 s 只做约 5% 的前推。近景机位按落点解析求出，不写死：先取落点需要交代的参照线——压边线取该条边线、压角取相交的两条边线、离边界超过 1.2 m 时取落点前方最近的一条场内白线——再以「线带 + 落点」为构图点，从近到远找能把它们全部收进画面安全区的最小距离。视线以边界法线为主、沿边界线带约 25° 斜角；机位仍在落点这一侧的场地内，画面下方是球场、上方是场外，避免暗色区域占满近景。机位高度随距离抬升，形成 55°–70° 的俯角。机位不越过球网；跟随段到近景之间若确实要过网，会插入一个抬高的过网关键帧。
-
-结果牌用 CanvasTexture 绘制并挂在相机下方，随 FOV 换算尺寸，保证与画面同屏且能随帧导出。圆形印记半径取 `CONTACT_RADIUS`，抬到白线之上 2 mm，重叠时不会被白线遮住，也不放大判定圆。
+[ReplayPreview](../src/components/ReplayPreview.tsx) 用 `requestAnimationFrame` 换算播放时刻，拖动时间轴时暂停。赛制或选点变化后回零；换色和改变画幅保留播放位置。预览按目标比例缩放，高度上限为 480 px。
 
 ## 视频导出
 
-### 封装选型
+[exportSettings.ts](../src/export/exportSettings.ts) 定义尺寸预设、帧率、默认值及编码参数；可选规格见[产品需求](PRD.md#导出与配色)。
 
-| 库 | 版本 | 许可证 | 维护状态 | 解包体积 |
-| --- | --- | --- | --- | --- |
-| Mediabunny | 1.66.0 | MPL-2.0 | 活跃（2026-11-13 更新） | 11,874,123 B |
-| mp4box | 2.5.0 | BSD-3-Clause | 活跃（2026-10-25 更新） | 2,485,275 B |
-| mp4-muxer | 5.2.2 | MIT | 已弃用，官方指向 Mediabunny（2025-07-02 后无更新） | 155,878 B |
+- 宽高为正偶数，帧率为 24、25、30、50 或 60 fps。
+- H.264 Baseline level 按宏块数、宏块率、单边宏块限制和码率选择；完整配置交给 `VideoEncoder.isConfigSupported` 检查。
+- 码率以 1920×1080、30 fps 的 8 Mbps 为基准，按像素数与帧率同比例计算；每秒一个关键帧。
+- 总帧数为 `5 × fps`。第 i 帧在 `i / fps` 采样，时间戳为 `round(i × 1_000_000 / fps)` 微秒，时长取相邻边界之差，末帧结束于 5,000,000 微秒。
 
-选定 **Mediabunny 1.66.0**，只用它的 MP4 封装能力（`Output`、`Mp4OutputFormat`、`BufferTarget`、`EncodedVideoPacketSource`、`EncodedPacket`），视频编码直接调原生 `VideoEncoder`，便于拿到真实配置和错误。mp4box 的 BSD 许可更宽松，但要自己拼 AVC track 与 sample 描述，接入成本明显更高；mp4-muxer 接入最简单，但已被官方弃用，不适合作为新代码的基础。
+[exportReplay.ts](../src/export/exportReplay.ts) 执行编码和封装，[useExportJob.ts](../src/export/useExportJob.ts) 管理单个活动任务、进度、取消与下载：
 
-MPL-2.0 是文件级弱 copyleft：本项目只通过 npm 引用未修改的包，不修改其源码，因此不要求本项目整体改用 MPL，项目自身的开源许可证仍由项目所有者决定。分发时保留该依赖的许可证声明与来源即可。体积一栏是 npm 解包大小，不代表浏览器产物。
+1. 复制赛制、落点、单位方向、完整色板和视频参数，作为本次任务快照。
+2. 检查浏览器编码能力；创建独立画布与场景，以 `pixelRatio: 1` 按目标尺寸渲染，并检查设备尺寸限制。
+3. 每帧调用 `evaluateReplay(input, i / fps, width / height)`，渲染后立即构造 `VideoFrame`，送入编码器后关闭该帧。
+4. 编码输出通过 Mediabunny 的 `EncodedVideoPacketSource` 串行写入 MP4。首包的 `decoderConfig` 随包传入，编码与封装错误传回任务。
+5. 编码队列超过 8 帧时等待 `dequeue`，每 5 帧让出事件循环。进度按编码回调确认的帧数计算，界面统一显示「导出中」。
+6. 完成时依次执行 `flush()`、等待写入链、`source.close()`、`output.finalize()`，再生成 Blob 并下载。100% 编码进度与封装完成分别处理。
+7. 取消通过 `AbortController` 停止送帧、丢弃未完成封装；成功、失败和取消均释放编码器与场景。下载 URL 使用后撤销。
 
-只导入上述五个导出的实际体积为 **129,305 B（minified）/ 34,782 B（gzip）**，测量方式：`esbuild --bundle --minify --format=esm --target=es2022` 打包一个仅导入这五个符号的入口。
+文件名由 `buildExportFilename` 生成，包含赛制、落点、宽高、帧率和本地时间。导出期间的编辑只影响界面及后续任务。
 
-正式导出接入后，`mediabunny` 已从 `devDependencies` 移到运行时 `dependencies`，只导入 `Output`、`Mp4OutputFormat`、`BufferTarget`、`EncodedVideoPacketSource`、`EncodedPacket`。生产入口 JS 由 787,519 B 增至 925,122 B（+137,603 B，+17.5%），gzip 由 212,025 B 增至 250,347 B（+38,322 B，+18.1%）；CSS 由 6,022 B 增至 6,863 B（gzip 1,917 B → 2,094 B）。体积以 `npm run build` 产物为准。
+## 配色与设置保存
 
-### 编码参数
+[courtColors.ts](../src/courtColors.ts) 定义三套预设、完整色板及八个可编辑字段。预设保留二维与三维各自的显示色值；自定义同一用途时同步更新对应字段。`setPalette` 更新材质、背景、雾、印记与结果牌纹理，替换后释放旧纹理，保留场景和播放状态。
 
-默认 1920×1080 / 30 fps，时长固定 5 s、无音轨；宽高和 fps 由导出设置指定：
+[ExportSettings](../src/components/ExportSettings.tsx) 的预设和帧率选择直接生效，自定义宽高通过「应用」提交，并校验数值及 H.264 范围。[PaletteSettings](../src/components/PaletteSettings.tsx) 提供颜色选择器和六位 HEX 输入；HEX 在失焦或按 Enter 后提交有效值。
 
-- `src/export/exportSettings.ts` 按宏块数、宏块率、单边宏块限制和码率生成 H.264 Baseline level；1080p30 为 Level 4.0，1080p60 为 4.2，4K30 为 5.1，4K60 为 5.2。码率以 1080p30 的 8 Mbps 为基线按像素数和 fps 同比例计算。`avc: { format: 'avc' }`，每秒一个关键帧（共 5 个）。
-- 采样 `t = 帧序号 / 帧率`，只编 `i = 0…(5 × fps − 1)`，不额外编码 `t = 5 s`；第 `i` 帧 `timestamp = round(i × 10⁶ / fps)`，`duration` 取相邻边界之差，首帧 0 µs、末帧结束 5,000,000 µs。
-- 画布渲染像素比固定为 1（`createReplayScene(canvas, { pixelRatio: 1 })`），否则设备 DPR 会把画布放大成非目标尺寸。
+[appSettings.ts](../src/settings/appSettings.ts) 定义 `AppSettings`，以 `badminton-hawkeye.settings` 为 localStorage 键，记录导出参数、配色模式和自定义色板。[useAppSettings](../src/settings/useAppSettings.ts) 在启动时读取、变更后保存。
 
-### 实现要点
+首次使用、读取失败或数据损坏时采用默认配置；存储可写时保存当前合法设置，覆盖损坏记录。存储不可写时，配置在当前页面生效。
 
-`render` 之后立刻用同一 canvas 构造 `VideoFrame`，避免绘制缓冲被清空；编码回调里把 `EncodedVideoChunk` 转成 `EncodedPacket` 后按序串行 `await source.add(packet, meta)`，首包必须带编码器给的 `decoderConfig`，否则 MP4 缺 `avcC`；`encoder.flush()` 只保证编码结束，之后还要等写入链完成，再 `source.close()` 与 `output.finalize()`；编码错误与封装错误分别记录并冒泡，不能只等 flush 就判定成功；`encodeQueueSize` 超过 8 时等 `dequeue` 事件做背压。
+## 验证工具
 
-### 初始 1080p30 实测结果（2026-11-16）
-
-验证工具在 `tools/mp4-probe`，命令见 README。固定双打输入：落点 `(3.055, 3.2)`、来向点 `(3.055, 0)`，即单位方向 `(0, 1)`。
-
-| 项目 | 结果 |
+| 命令 | 覆盖范围 |
 | --- | --- |
-| 分辨率 | 1920×1080 |
-| 帧率 | 30 fps（ffprobe `avg_frame_rate = 30/1`） |
-| 帧数 | 150 |
-| 时长 | 5.000 s（时间戳 0 → 5,000,000 µs） |
-| 文件大小 | 1,815,323 B |
-| 轨道 | 仅一条视频轨，H.264 Baseline，无音轨 |
-| 渲染 + 编码耗时 | 约 0.9 s（Chrome 914 ms、Edge 901 ms，随机器波动） |
-| 封装耗时 | 3–5 ms |
+| `npm test` | 几何、坐标、方向、回放、编码参数、任务生命周期及设置保存 |
+| `npm run build` | 类型检查与生产构建 |
+| `npm run probe:typecheck` | MP4 验证工具的独立类型检查 |
+| `npm run probe -- --browser chrome` | 固定输入的渲染、编码、封装与播放验证 |
+| `npm run smoke:export -- --browser chrome` | 正式界面的选点、判定、导出、取消、重试与不支持提示 |
+| `npm run smoke:export -- --browser chrome --server preview` | 生产构建的同一路径，运行前先执行 `npm run build` |
 
-播放验证：原生 `<video>` 读回 1920×1080、时长 5.000 s；播放 1.2 s 后 `currentTime = 1.201 s`；跳转到 3.2 s 后 `currentTime = 3.2 s`，该帧与 4.6 s 定格帧均非黑屏，13 mm 印记压在双打边线上、画面下方 IN 结果牌可读。
+`tools/mp4-probe/run-probe.mjs` 和 `tools/export-smoke/run-export-smoke.mjs` 使用 macOS 的 Chrome／Edge 路径，启动独立无头浏览器与 Vite。`--browser edge` 选择 Edge，`--port` 修改端口；默认分别为 5199 和 5201。
 
-运行环境（2026-11-16 实测，`--headless=new`，无头模式使用 ANGLE Metal 渲染）：
-
-- macOS 27.0.1（Darwin 27.0.0，Apple M1 Pro），Node 24.13.0。
-- Chrome 157.0.8103.51：`VideoEncoder` / `VideoFrame` / WebGL 均可用，`isConfigSupported` 对 1080p30 `avc1.420028`、`avc1.640028`、`avc1.4d0028` 与 720p30 `avc1.42001f` 全部返回 `true`。
-- Edge 153.0.4234.48：同样全部返回 `true`，并生成相同参数的可播放文件。
-
-失败路径实测：编码字符串不存在时（`avc1.ffffff`）`isConfigSupported` 返回 `supported: false`，不抛异常；HEVC（`hvc1.1.6.L93.B0`）在 Chrome 157 返回 `true`、Edge 153 返回 `false`。因此导出固定使用 H.264，能力判断一律以 `isConfigSupported` 的结果为准，不能按浏览器品牌推断；不支持时提示当前浏览器缺少 H.264 编码能力。
-
-### 导出流程
-
-实现位于 `src/export/exportReplay.ts`（编码、封装、清理）与 `src/export/useExportJob.ts`（单任务、进度、下载）。
-
-1. 点击导出时复制赛制、落点、单位方向、完整色板、宽高和 fps 作为快照；之后继续编辑不改变本次视频，同时只允许一个活动任务。
-2. 能力判断：`VideoEncoder` / `VideoFrame` 缺失，或 `isConfigSupported` 对所选完整配置返回 false / 拒绝，都给出“当前环境不支持视频导出”的可见提示，预览照常。
-3. 独立画布使用所选宽高和 `createReplayScene(canvas, palette, { pixelRatio: 1 })`，检查 WebGL 尺寸限制；按 `t = i / fps` 调 `evaluateReplay(input, t, width / height)` 渲染 `5 × fps` 帧。
-4. 每帧构造 `VideoFrame` 后立即编码并关闭；`keyFrame` 取 `i % fps === 0`。`encodeQueueSize > 8` 时等待 `dequeue` 背压，每 5 帧让出一次事件循环。
-5. 进度按编码回调确认的帧数换算 0–100%，界面区分准备、编码、封装、收尾；封装完成前不宣告成功。
-6. 取消通过 `AbortController` 在每次送帧、背压等待、flush 后、写入链后、finalize 前检查；取消后立即停止送帧，关闭编码器并 `output.cancel()` 丢弃半成品，不建立下载。编码或封装错误同样冒泡，不能被 flush 成功掩盖。
-7. 成功路径：`flush()` → 等写入链 → `source.close()` → `output.finalize()` → 取 `BufferTarget` 生成 Blob → 自动下载带落点与时间戳的文件名；下载 URL 在使用后撤销。
-8. 成功、失败、取消与组件卸载都进入统一清理：关闭 `VideoEncoder`、取消未完成的封装、`scene.dispose()` 并清空画布与缓冲引用。
-
-单元测试在 `src/export/exportReplay.test.ts`，用假后端覆盖帧时间轴、进度换算、输入快照、五档帧率的送帧与关键帧位置、背压期间取消、取消后重试、编码/封装错误和不支持提示。正式界面路径由 `tools/export-smoke` 在真实浏览器中覆盖成功、取消、重试、OUT 结果与不支持提示。
-
-
-## 验证与交付
-
-重点测试圆与矩形相交、相切、角落、赛制切换、坐标转换和方向一致性。用代表性样片检查构图与触地效果，实际播放导出文件验证时长和画面。
-
-项目 README 提供安装、启动、构建和使用步骤，记录实际验证的浏览器环境。依赖与素材适合开源分发；开源许可证由项目所有者确定。
-
-
-## 自定义配色与浏览器设置
-
-`courtColors.ts` 定义完整色板和三套预设。二维与三维原有展示色值保留在色板中；用户编辑同一用途时统一更新对应值。SVG、CSS、三维场景和导出接收同一份解析后的色板。`setPalette` 更新材质、背景、雾和结果牌纹理，不重建场景；替换纹理后释放旧纹理，保留预览播放状态。
-
-`settings/appSettings.ts` 校验 localStorage 中的完整设置，`useAppSettings` 负责启动读取与变更保存。首次使用、读取失败或数据损坏时静默采用默认设置，存储可写时随后覆盖损坏记录；浏览器禁用存储时只在当前页面生效。
-
-目标画幅由宽高计算。`domain/replay.ts` 为全景和跟随机位保留横向空间，近景投影使用实际 aspect 求解距离；三维结果牌同时约束横向和纵向尺寸。预览等比缩放且高度不超过 480 px，导出按目标像素渲染。颜色、分辨率和 fps 均不改变运动时间线、接触半径和几何判定。
+每次运行会重建各自的 `out/` 目录，输出报告、截图和视频。该目录被 Git 忽略，需保留的验收结果写入[验收记录](ACCEPTANCE.md)，样片存入 `docs/media/`。
