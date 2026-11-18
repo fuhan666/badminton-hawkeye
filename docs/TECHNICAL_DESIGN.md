@@ -54,7 +54,7 @@ TypeScript、React 和 Vite 构成应用；SVG 负责球场编辑，Three.js 负
 
 有效矩形为 `X ∈ [-W/2, W/2]`、`Z ∈ [-6.7, 6.7]`，W 由赛制决定。双打落点 `(3.063, 0)` 与外沿相切判 IN，`(3.064, 0)` 判 OUT；角落 `(3.060, 6.710)` 到边界距离约 0.014142 m，判 OUT。
 
-[direction.ts](../src/domain/direction.ts) 生成 `normalize(landing - incoming)`。来向点缺失或两点距离小于 0.01 m 时返回无效方向；有效时生成 `ReplayInput { format, landing, direction }`。回放输入只保留单位方向，因此沿同一射线调整来向点距离会得到相同回放。
+[direction.ts](../src/domain/direction.ts) 生成 `normalize(landing - incoming)`。来向点缺失或两点距离小于 0.01 m 时返回无效方向；有效时生成 `ReplayInput { format, landing, direction, flightHeight }`。方向只保留单位向量，因此沿同一射线调整来向点距离会得到相同回放。
 
 ## 三维回放
 
@@ -62,11 +62,13 @@ TypeScript、React 和 Vite 构成应用；SVG 负责球场编辑，Three.js 负
 
 分镜为 0–0.8 秒全景、0.8–2.0 秒跟随、2.0–3.6 秒慢放、3.6–5.0 秒定格，触地时刻为 3.2 秒。球体原点位于球托底端，触地后直接取 `(landing.x, 0, landing.z)`；印记半径始终取 `CONTACT_RADIUS`。
 
-球路由关键时刻的飞行进度求值，朝向取轨迹切线。跨网轨迹计算抬升高度；相机关键帧用 Hermite 插值衔接。近景根据落点选择参照线，再依据宽高比求机位距离；全景与跟随机位适配窄画幅。具体构图参数由 `replay.ts` 维护。
+球路由关键时刻的飞行进度求值，水平长度为 4.2 m。`FLIGHT_HEIGHTS` 定义低／中／高为 1.7／2.5／4.0 m：跨网片段按网面交点设置高度参照，未跨网片段取进度 0.5；起点恰在网面时直接使用所选高度。通常起始高度为 2.5 m，两段二次曲线经高度参照点落到地面，并共用参照点切线；低档连续下降，中、高档在参照点收平后下落。球体朝向取轨迹解析切线。
+
+相机关键帧用 Hermite 插值衔接。近景根据落点选择参照线，再依据宽高比求机位距离；全景与跟随机位适配窄画幅。具体构图参数由 `replay.ts` 维护。
 
 [scene.ts](../src/replay/scene.ts) 将回放状态应用到球体、相机、印记和结果牌。印记置于白线之上以显示重叠关系；结果牌挂在相机下方，尺寸同时受横向和纵向画幅约束。
 
-[ReplayPreview](../src/components/ReplayPreview.tsx) 用 `requestAnimationFrame` 换算播放时刻，拖动时间轴时暂停。赛制或选点变化后回零；换色和改变画幅保留播放位置。预览按目标比例缩放，高度上限为 480 px。
+[ReplayPreview](../src/components/ReplayPreview.tsx) 用 `requestAnimationFrame` 换算播放时刻，拖动时间轴时暂停。赛制、选点或高度变化后回零；换色和改变画幅保留播放位置。高度由 App 管理，初始为中档。预览按目标比例缩放，高度上限为 480 px。
 
 ## 视频导出
 
@@ -79,7 +81,7 @@ TypeScript、React 和 Vite 构成应用；SVG 负责球场编辑，Three.js 负
 
 [exportReplay.ts](../src/export/exportReplay.ts) 执行编码和封装，[useExportJob.ts](../src/export/useExportJob.ts) 管理单个活动任务、进度、取消与下载：
 
-1. 复制赛制、落点、单位方向、完整色板和视频参数，作为本次任务快照。
+1. 复制赛制、落点、单位方向、过网高度、完整色板和视频参数，作为本次任务快照。
 2. 检查浏览器编码能力；创建独立画布与场景，以 `pixelRatio: 1` 按目标尺寸渲染，并检查设备尺寸限制。
 3. 每帧调用 `evaluateReplay(input, i / fps, width / height)`，渲染后立即构造 `VideoFrame`，送入编码器后关闭该帧。
 4. 编码输出通过 Mediabunny 的 `EncodedVideoPacketSource` 串行写入 MP4。首包的 `decoderConfig` 随包传入，编码与封装错误传回任务。

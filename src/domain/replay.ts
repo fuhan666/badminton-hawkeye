@@ -1,6 +1,6 @@
 import { CONTACT_RADIUS, COURT, LINE, VALID_AREA } from './court'
 import type { GroundPoint, MatchFormat } from './court'
-import type { ReplayInput } from './direction'
+import type { FlightHeight, ReplayInput } from './direction'
 import { isInsideCourt } from './judgement'
 
 /**
@@ -58,10 +58,8 @@ export const SLOW_MO_END = 3.6
 export const FLIGHT_LENGTH = 4.2
 /** 起手高度 */
 export const LAUNCH_HEIGHT = 2.5
-/** 跨网处目标净高（高于网柱 1.55 m） */
-export const NET_CROSSING_HEIGHT = 1.9
-/** 轨迹最高点上限 */
-export const MAX_FLIGHT_HEIGHT = 6
+/** 球托底端过网时的离地高度；未跨网的片段以飞行中点为高度参照。 */
+export const FLIGHT_HEIGHTS: Record<FlightHeight, number> = { low: 1.7, medium: 2.5, high: 4 }
 /** 球体淡出与结果牌淡入的时刻 */
 export const BALL_FADE_START = CONTACT_TIME
 export const BALL_FADE_END = CONTACT_TIME + 0.25
@@ -170,8 +168,11 @@ interface Flight {
   dir: { x: number; z: number }
   start: Vec3
   landing: Vec3
-  /** 跨网抬升量，保证常规跨网路径过网净高 */
-  lift: number
+  height: number
+  /** 网面或飞行中点对应的进度 */
+  heightProgress: number
+  /** 高度参照点处的 dy/du，两侧曲线共用以保持切线连续 */
+  heightSlope: number
 }
 
 function buildFlight(input: ReplayInput): Flight {
@@ -188,19 +189,38 @@ function buildFlight(input: ReplayInput): Flight {
     z: landing.z - dir.z * FLIGHT_LENGTH,
   }
 
-  let lift = 0
-  const crossesNet = start.z * landing.z < 0
-  if (crossesNet) {
-    const crossing = clamp(-start.z / (landing.z - start.z), 0, 1)
-    const baseHeight = LAUNCH_HEIGHT * (1 - crossing)
-    const sine = Math.sin(Math.PI * crossing)
-    if (sine > 1e-6 && baseHeight < NET_CROSSING_HEIGHT) {
-      lift = (NET_CROSSING_HEIGHT - baseHeight) / sine
+  const height = FLIGHT_HEIGHTS[input.flightHeight]
+  const crossesNet = start.z * landing.z <= 0 && landing.z !== 0
+  const heightProgress = crossesNet ? -start.z / (landing.z - start.z) : 0.5
+  if (heightProgress === 0) start.y = height
+
+  // 低档连续下降；中、高档在参照点收平后下落。下降段斜率取两侧割线的调和平均，
+  // 两段二次曲线均保持在端点高度之间，不再需要对轨迹高度截断。
+  const drop = start.y - height
+  const heightSlope = drop > 0
+    ? (-2 * drop * height) / (drop * (1 - heightProgress) + height * heightProgress)
+    : 0
+
+  return { dir, start, landing, height, heightProgress, heightSlope }
+}
+
+function flightHeightAt(flight: Flight, u: number): { y: number; slope: number } {
+  const { height, heightProgress: crossing, heightSlope } = flight
+  if (u < crossing) {
+    const s = u / crossing
+    const drop = flight.start.y - height
+    return {
+      y: height + drop * (1 - s) ** 2 - heightSlope * crossing * s * (1 - s),
+      slope: (-2 * drop * (1 - s)) / crossing + heightSlope * (2 * s - 1),
     }
-    lift = Math.min(lift, MAX_FLIGHT_HEIGHT - LAUNCH_HEIGHT)
   }
 
-  return { dir, start, landing, lift }
+  const length = 1 - crossing
+  const s = (u - crossing) / length
+  return {
+    y: height * (1 - s * s) + heightSlope * length * s * (1 - s),
+    slope: (-2 * height * s) / length + heightSlope * (1 - 2 * s),
+  }
 }
 
 /** 球托底端在给定飞行进度处的位置；u = 1 时精确等于落点圆心 */
@@ -209,7 +229,7 @@ function ballPositionAt(flight: Flight, progress: number): Vec3 {
   if (u >= 1) return { ...flight.landing }
   return {
     x: flight.start.x + (flight.landing.x - flight.start.x) * u,
-    y: LAUNCH_HEIGHT * (1 - u) + flight.lift * Math.sin(Math.PI * u),
+    y: flightHeightAt(flight, u).y,
     z: flight.start.z + (flight.landing.z - flight.start.z) * u,
   }
 }
@@ -219,7 +239,7 @@ function ballForwardAt(flight: Flight, progress: number): Vec3 {
   const u = clamp(progress, 0, 0.999999)
   const tangent: Vec3 = {
     x: flight.landing.x - flight.start.x,
-    y: -LAUNCH_HEIGHT + flight.lift * Math.PI * Math.cos(Math.PI * u),
+    y: flightHeightAt(flight, u).slope,
     z: flight.landing.z - flight.start.z,
   }
   const unit = normalize(tangent)
@@ -785,5 +805,5 @@ export function replayVerdict(input: ReplayInput): 'IN' | 'OUT' {
 /** 供 UI 识别输入变化的稳定键；数值相同即同一回放 */
 export function replayInputKey(input: ReplayInput | null): string {
   if (!input) return 'none'
-  return [input.format, input.landing.x, input.landing.z, input.direction.x, input.direction.z].join('|')
+  return [input.format, input.landing.x, input.landing.z, input.direction.x, input.direction.z, input.flightHeight].join('|')
 }

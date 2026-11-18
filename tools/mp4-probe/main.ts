@@ -232,7 +232,7 @@ async function encodeReplay(): Promise<EncodedOutput> {
     throw new Error('没有可用的 H.264 编码配置：' + JSON.stringify(result.support.map((s) => [s.label, s.supported, s.error ?? ''])))
   }
 
-  const input = buildReplayInput('doubles', LANDING, INCOMING)
+  const input = buildReplayInput('doubles', LANDING, INCOMING, 'medium')
   if (!input) throw new Error('固定输入未产生有效回放输入')
 
   const canvas = document.createElement('canvas')

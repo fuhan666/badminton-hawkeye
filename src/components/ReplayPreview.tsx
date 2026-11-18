@@ -87,7 +87,7 @@ export default function ReplayPreview({
     sceneRef.current?.render(frame)
   }, [frame])
 
-  // 落点、方向或赛制变化后回零并暂停，用新的输入重新开始
+  // 落点、方向、赛制或高度变化后回零并暂停，用新的输入重新开始
   useEffect(() => {
     timeRef.current = 0
     setTime(0)

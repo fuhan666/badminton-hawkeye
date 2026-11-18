@@ -39,19 +39,23 @@ export function resolveDirection(
   return { unit: { x: dx / distance, z: dz / distance }, distance, issue: null }
 }
 
-/** 回放输入只带赛制、落点与单位方向；来向点坐标与距离不进入该结构。 */
+export type FlightHeight = 'low' | 'medium' | 'high'
+
+/** 来向点坐标与距离不进入回放输入，只保留单位方向。 */
 export interface ReplayInput {
   format: MatchFormat
   landing: GroundPoint
   direction: GroundPoint
+  flightHeight: FlightHeight
 }
 
 export function buildReplayInput(
   format: MatchFormat,
   landing: GroundPoint,
   incoming: GroundPoint | null,
+  flightHeight: FlightHeight,
 ): ReplayInput | null {
   const { unit } = resolveDirection(landing, incoming)
   if (!unit) return null
-  return { format, landing: { ...landing }, direction: unit }
+  return { format, landing: { ...landing }, direction: unit, flightHeight }
 }

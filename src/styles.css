@@ -63,7 +63,8 @@ h1 {
 }
 
 .format,
-.target-switch {
+.target-switch,
+.height-switch {
   display: inline-flex;
   gap: 2px;
   padding: 3px;
@@ -72,7 +73,8 @@ h1 {
 }
 
 .format__button,
-.target-switch__button {
+.target-switch__button,
+.height-switch__button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -88,7 +90,8 @@ h1 {
 }
 
 .format__button.is-active,
-.target-switch__button.is-active {
+.target-switch__button.is-active,
+.height-switch__button.is-active {
   background: #ffffff;
   color: #20252b;
   box-shadow: 0 1px 3px #20252b12;
@@ -335,6 +338,19 @@ h2 {
 .replay {
   display: grid;
   gap: 12px;
+}
+
+.replay-height {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.height-switch__button {
+  padding-right: 10px;
+  padding-left: 10px;
 }
 
 .replay__stage,

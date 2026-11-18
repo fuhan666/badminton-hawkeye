@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { CONTACT_RADIUS, COURT } from './court'
 import { buildReplayInput } from './direction'
-import type { ReplayInput } from './direction'
+import type { FlightHeight, ReplayInput } from './direction'
 import {
   CONTACT_TIME,
   FOLLOW_END,
-  MAX_FLIGHT_HEIGHT,
+  FLIGHT_HEIGHTS,
+  LAUNCH_HEIGHT,
   OVERVIEW_END,
   REPLAY_DURATION,
   SLOW_MO_END,
@@ -16,13 +17,97 @@ import {
 } from './replay'
 
 function input(landing: { x: number; z: number }, incoming: { x: number; z: number } | null, format: 'singles' | 'doubles' = 'doubles'): ReplayInput {
-  const result = buildReplayInput(format, landing, incoming)
+  const result = buildReplayInput(format, landing, incoming, 'medium')
   if (!result) throw new Error('测试输入应产生有效方向')
   return result
 }
 
 /** 标准跨网输入：从 (0, -3) 打向 (0, 3) */
 const CROSS_NET = input({ x: 0, z: 3 }, { x: 0, z: -3 })
+
+function timeAtProgress(progress: number): number {
+  let low = 0
+  let high = CONTACT_TIME
+  for (let step = 0; step < 50; step += 1) {
+    const middle = (low + high) / 2
+    if (flightProgressAt(middle) < progress) low = middle
+    else high = middle
+  }
+  return (low + high) / 2
+}
+
+const HEIGHT_LEVELS: FlightHeight[] = ['low', 'medium', 'high']
+
+describe('过网高度', () => {
+  it.each(HEIGHT_LEVELS)('%s：正向、反向与斜向跨网都准确经过设定高度', (flightHeight) => {
+    for (const landing of [
+      { x: 0, z: 3 },
+      { x: 0, z: -3 },
+      { x: 2, z: 1 },
+      { x: 0, z: 0.01 },
+      { x: 0, z: 4.19 },
+      { x: 0, z: 4.2 },
+    ]) {
+      const replay = { ...input(landing, { x: 0, z: -Math.sign(landing.z) * 3 }), flightHeight }
+      const start = evaluateReplay(replay, 0).ball.position
+      const crossing = -start.z / (landing.z - start.z)
+      const time = timeAtProgress(crossing)
+      const frame = evaluateReplay(replay, time)
+      expect(frame.ball.position.z).toBeCloseTo(0, 8)
+      expect(frame.ball.position.y).toBeCloseTo(FLIGHT_HEIGHTS[flightHeight], 8)
+
+      // 网面两侧的位置与切线连续，不因分段改变球的朝向。
+      const before = evaluateReplay(replay, Math.max(0, time - 1e-10)).ball
+      const after = evaluateReplay(replay, time + 1e-10).ball
+      expect(after.position.y).toBeCloseTo(before.position.y, 4)
+      expect(after.forward.y).toBeCloseTo(before.forward.y, 4)
+      expect(after.forward.z).toBeCloseTo(before.forward.z, 4)
+    }
+  })
+
+  it('后场、平行网、反向和网面落点都保留方向，并在中点体现三档高度', () => {
+    for (const [landing, incoming] of [
+      [{ x: 0, z: 6.7 }, { x: 0, z: -3 }],
+      [{ x: 2, z: 2 }, { x: -2, z: 2 }],
+      [{ x: 0, z: 2 }, { x: 0, z: 4 }],
+      [{ x: 0, z: 0 }, { x: 0, z: -3 }],
+    ]) {
+      const base = input(landing, incoming)
+      const frames = HEIGHT_LEVELS.map((flightHeight) =>
+        evaluateReplay({ ...base, flightHeight }, timeAtProgress(0.5)),
+      )
+      frames.forEach((frame, index) => {
+        expect(frame.ball.position.y).toBeCloseTo(FLIGHT_HEIGHTS[HEIGHT_LEVELS[index]], 10)
+      })
+      for (const frame of frames) {
+        expect(frame.ball.position.x).toBe(frames[0].ball.position.x)
+        expect(frame.ball.position.z).toBe(frames[0].ball.position.z)
+        expect(frame.verdict).toBe(frames[0].verdict)
+      }
+    }
+  })
+
+  it.each(HEIGHT_LEVELS)('%s：球路保持在端点高度范围内，朝向沿轨迹切线并准确触地', (flightHeight) => {
+    for (const z of [0, 0.01, 0.6, 3, 4.19, 6.7]) {
+      const replay = { ...input({ x: 0, z }, { x: 0, z: -3 }), flightHeight }
+      for (const progress of [0.1, 0.3, 0.5, 0.8, 0.98]) {
+        const time = timeAtProgress(progress)
+        const frame = evaluateReplay(replay, time)
+        expect(frame.ball.position.y).toBeGreaterThan(0)
+        expect(frame.ball.position.y).toBeLessThanOrEqual(Math.max(LAUNCH_HEIGHT, FLIGHT_HEIGHTS[flightHeight]) + 1e-9)
+        const before = evaluateReplay(replay, time - 1e-6).ball.position
+        const after = evaluateReplay(replay, time + 1e-6).ball.position
+        const length = Math.hypot(after.y - before.y, after.z - before.z)
+        expect(frame.ball.forward.y).toBeCloseTo((after.y - before.y) / length, 5)
+        expect(frame.ball.forward.z).toBeCloseTo((after.z - before.z) / length, 5)
+      }
+      const contact = evaluateReplay(replay, CONTACT_TIME)
+      expect(contact.ball.position).toEqual({ x: 0, y: 0, z })
+      expect(contact.ball.forward.y).toBeLessThan(0)
+      expect(contact.marker).toEqual(evaluateReplay({ ...replay, flightHeight: 'medium' }, CONTACT_TIME).marker)
+    }
+  })
+})
 
 describe('evaluateReplay 确定性', () => {
   it('同一输入与时刻两次调用逐字段相等', () => {
@@ -52,7 +137,7 @@ describe('evaluateReplay 确定性', () => {
     }
   })
 
-  it('输入键随落点、方向与赛制变化', () => {
+  it('输入键随落点、方向、赛制与高度变化', () => {
     const base = input({ x: 0, z: 3 }, { x: 0, z: -3 })
     expect(replayInputKey(base)).not.toBe(replayInputKey(input({ x: 0.001, z: 3 }, { x: 0, z: -3 })))
     expect(replayInputKey(base)).not.toBe(replayInputKey(input({ x: 0, z: 3 }, { x: 0.5, z: -3 })))
@@ -60,6 +145,7 @@ describe('evaluateReplay 确定性', () => {
       replayInputKey(input({ x: 0, z: 3 }, { x: 0, z: -3 }, 'singles')),
     )
     expect(replayInputKey(null)).toBe('none')
+    expect(replayInputKey(base)).not.toBe(replayInputKey({ ...base, flightHeight: 'high' }))
   })
 })
 
@@ -119,7 +205,7 @@ describe('evaluateReplay 球路', () => {
     }
     expect(crossingHeight).not.toBeNull()
     expect(crossingHeight as number).toBeGreaterThanOrEqual(COURT.netPostHeight)
-    expect(peak).toBeLessThanOrEqual(MAX_FLIGHT_HEIGHT + 1e-9)
+    expect(peak).toBeLessThanOrEqual(FLIGHT_HEIGHTS.medium + 1e-9)
   })
 
   it('飞行进度单调不减且触地后为 1', () => {
@@ -366,14 +452,16 @@ describe('镜头净空', () => {
     { x: -2.4, z: 5.6 },
   ]
 
-  it.each([16 / 9, 9 / 16, 9 / 20, 1, 21 / 9])('%s 画幅：镜头全程在地面之上，且不穿过球网', (aspect) => {
+  it.each([16 / 9, 9 / 16, 9 / 20, 1, 21 / 9].flatMap((aspect) =>
+    HEIGHT_LEVELS.map((flightHeight) => ({ aspect, flightHeight })),
+  ))('$aspect 画幅 $flightHeight 档：镜头全程在地面之上，且不穿过球网', ({ aspect, flightHeight }) => {
     for (const landing of landings) {
       for (const incoming of [
         { x: landing.x, z: -3.2 },
         { x: landing.x - 2.6, z: -3.2 },
         { x: 0, z: 3.2 },
       ]) {
-        const replay = input(landing, incoming)
+        const replay = { ...input(landing, incoming), flightHeight }
         for (let time = 0; time <= REPLAY_DURATION; time += 0.02) {
           const p = evaluateReplay(replay, time, aspect).camera.position
           expect(p.y).toBeGreaterThan(0.45)

@@ -81,6 +81,7 @@ export function freezeExportInput(input: ReplayInput): ReplayInput {
     format: input.format,
     landing: { ...input.landing },
     direction: { ...input.direction },
+    flightHeight: input.flightHeight,
   }
 }
 

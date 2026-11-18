@@ -79,23 +79,24 @@ describe('resolveDirection - invalid input', () => {
 
 describe('buildReplayInput', () => {
   it('returns null while the direction is missing or coincident', () => {
-    expect(buildReplayInput('doubles', LANDING, null)).toBeNull()
-    expect(buildReplayInput('doubles', LANDING, { ...LANDING })).toBeNull()
+    expect(buildReplayInput('doubles', LANDING, null, 'medium')).toBeNull()
+    expect(buildReplayInput('doubles', LANDING, { ...LANDING }, 'medium')).toBeNull()
   })
 
-  it('carries only format, landing and the unit direction', () => {
-    const input = buildReplayInput('singles', LANDING, { x: 2.4, z: -0.8 })
+  it('carries format, landing, the unit direction and the selected height', () => {
+    const input = buildReplayInput('singles', LANDING, { x: 2.4, z: -0.8 }, 'high')
     expect(input).toEqual({
       format: 'singles',
       landing: LANDING,
       direction: { x: 0, z: 1 },
+      flightHeight: 'high',
     })
-    expect(Object.keys(input!)).toEqual(['format', 'landing', 'direction'])
+    expect(Object.keys(input!)).toEqual(['format', 'landing', 'direction', 'flightHeight'])
   })
 
   it('gives identical input for same-direction, different-distance incoming points', () => {
-    const near = buildReplayInput('doubles', LANDING, { x: 2.4, z: 1.8 })
-    const far = buildReplayInput('doubles', LANDING, { x: 2.4, z: 5.5 })
+    const near = buildReplayInput('doubles', LANDING, { x: 2.4, z: 1.8 }, 'medium')
+    const far = buildReplayInput('doubles', LANDING, { x: 2.4, z: 5.5 }, 'medium')
     expect(near).toEqual(far)
   })
 })

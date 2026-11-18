@@ -18,7 +18,7 @@ import {
 import type { ExportBackend, ExportProgress } from './exportReplay'
 
 function input(): ReplayInput {
-  const value = buildReplayInput('doubles', { x: 3.055, z: 3.2 }, { x: 3.055, z: 0 })
+  const value = buildReplayInput('doubles', { x: 3.055, z: 3.2 }, { x: 3.055, z: 0 }, 'medium')
   if (!value) throw new Error('测试输入应产生有效方向')
   return value
 }
@@ -121,13 +121,15 @@ describe('导出文件名', () => {
 })
 
 describe('输入快照', () => {
-  it('复制落点与方向，后续修改不影响导出输入', () => {
+  it('复制落点、方向与高度，后续修改不影响导出输入', () => {
     const source = input()
     const snapshot = freezeExportInput(source)
     source.landing.x = 99
     source.direction.z = -1
+    source.flightHeight = 'high'
     expect(snapshot.landing).toEqual({ x: 3.055, z: 3.2 })
     expect(snapshot.direction).toEqual({ x: 0, z: 1 })
+    expect(snapshot.flightHeight).toBe('medium')
   })
 })
 

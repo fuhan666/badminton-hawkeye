@@ -11,6 +11,7 @@ import { COURT_COLORS, updatePalette } from './courtColors'
 import type { CourtColor } from './courtColors'
 import type { GroundPoint, MatchFormat } from './domain/court'
 import { buildReplayInput, resolveDirection } from './domain/direction'
+import type { FlightHeight } from './domain/direction'
 import { isInsideCourt } from './domain/judgement'
 import { useExportJob } from './export/useExportJob'
 
@@ -24,8 +25,15 @@ const TARGETS: { value: EditTarget; label: string }[] = [
   { value: 'incoming', label: '来向点' },
 ]
 
+const HEIGHTS: { value: FlightHeight; label: string }[] = [
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+]
+
 export default function App() {
   const [format, setFormat] = useState<MatchFormat>('doubles')
+  const [flightHeight, setFlightHeight] = useState<FlightHeight>('medium')
   const [settings, setSettings] = useAppSettings()
   const [landing, setLanding] = useState<GroundPoint>({ x: 2.2, z: 3.2 })
   const [incoming, setIncoming] = useState<GroundPoint | null>(null)
@@ -37,8 +45,8 @@ export default function App() {
   const inBounds = isInsideCourt(landing, format)
   const direction = resolveDirection(landing, incoming)
   const replayInput = useMemo(
-    () => buildReplayInput(format, landing, incoming),
-    [format, landing, incoming],
+    () => buildReplayInput(format, landing, incoming, flightHeight),
+    [format, landing, incoming, flightHeight],
   )
 
   function handleChange(next: EditTarget, point: GroundPoint) {
@@ -215,6 +223,22 @@ export default function App() {
           <section className="panel" aria-labelledby="replay-title">
             <div className="panel__head">
               <h2 id="replay-title">三维回放</h2>
+              <div className="replay-height">
+                <span id="height-label">过网高度</span>
+                <div className="height-switch" role="group" aria-labelledby="height-label">
+                  {HEIGHTS.map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      className={item.value === flightHeight ? 'height-switch__button is-active' : 'height-switch__button'}
+                      aria-pressed={item.value === flightHeight}
+                      onClick={() => setFlightHeight(item.value)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             {replayInput ? (
               <ReplayPreview input={replayInput} palette={palette} aspect={aspect} />
