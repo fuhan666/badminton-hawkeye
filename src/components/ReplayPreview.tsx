@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import type { CourtColor } from '../courtColors'
+import type { CourtPalette } from '../courtColors'
 import type { ReplayInput } from '../domain/direction'
 import { REPLAY_DURATION, evaluateReplay } from '../domain/replay'
 import { createReplayScene } from '../replay/scene'
@@ -8,43 +8,37 @@ import type { ReplayScene } from '../replay/scene'
 
 interface ReplayPreviewProps {
   input: ReplayInput
-  courtColor: CourtColor
-  /** 顶部播放按钮的请求序号，递增一次即从头播放 */
-  playSignal: number
-  /** 顶部暂停按钮的请求序号 */
-  pauseSignal: number
-  onPlayingChange: (playing: boolean) => void
+  palette: CourtPalette
+  aspect: number
 }
 
 export default function ReplayPreview({
   input,
-  courtColor,
-  playSignal,
-  pauseSignal,
-  onPlayingChange,
+  palette,
+  aspect,
 }: ReplayPreviewProps) {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const sceneRef = useRef<ReplayScene | null>(null)
   const timeRef = useRef(0)
-  const colorRef = useRef(courtColor)
-  colorRef.current = courtColor
+  const colorRef = useRef(palette)
+  colorRef.current = palette
 
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [runId, setRunId] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
-  const frame = useMemo(() => evaluateReplay(input, time), [input, time])
+  const frame = useMemo(() => evaluateReplay(input, time, aspect), [input, time, aspect])
   const frameRef = useRef(frame)
   frameRef.current = frame
 
-  const start = useCallback(() => {
+  function restart() {
     timeRef.current = 0
     setTime(0)
     setRunId((value) => value + 1)
     setPlaying(true)
-  }, [])
+  }
 
   // 场景只在挂载时创建一次，卸载时释放几何、材质与渲染器
   useEffect(() => {
@@ -84,9 +78,9 @@ export default function ReplayPreview({
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return
-    scene.setCourtColor(courtColor)
+    scene.setPalette(palette)
     scene.render(frameRef.current)
-  }, [courtColor])
+  }, [palette])
 
   // 时刻或输入变化时重绘；画面完全由 evaluateReplay 的输出决定
   useEffect(() => {
@@ -128,20 +122,6 @@ export default function ReplayPreview({
     return () => cancelAnimationFrame(handle)
   }, [playing, runId])
 
-  useEffect(() => {
-    if (playSignal === 0) return
-    start()
-  }, [playSignal, start])
-
-  useEffect(() => {
-    if (pauseSignal === 0) return
-    setPlaying(false)
-  }, [pauseSignal])
-
-  useEffect(() => {
-    onPlayingChange(playing)
-  }, [playing, onPlayingChange])
-
   function handleSeek(event: ChangeEvent<HTMLInputElement>) {
     const next = Number(event.target.value)
     setPlaying(false)
@@ -162,17 +142,6 @@ export default function ReplayPreview({
         ) : null}
       </div>
       <div className="replay__controls">
-        <button
-          type="button"
-          className="action action--compact"
-          onClick={() => (playing ? setPlaying(false) : start())}
-          disabled={Boolean(error)}
-        >
-          {playing ? '暂停' : finished ? '重播' : '播放'}
-        </button>
-        <button type="button" className="link-button" onClick={start} disabled={Boolean(error)}>
-          从头重播
-        </button>
         <input
           className="replay__range"
           type="range"
@@ -184,13 +153,21 @@ export default function ReplayPreview({
           onChange={handleSeek}
           disabled={Boolean(error)}
         />
+        <button
+          type="button"
+          className="action action--compact"
+          onClick={() => setPlaying((value) => !value)}
+          disabled={Boolean(error)}
+        >
+          {playing ? '暂停' : finished ? '重播' : '播放'}
+        </button>
+        <button type="button" className="link-button" onClick={restart} disabled={Boolean(error)}>
+          从头重播
+        </button>
         <span className="replay__time">
-          {time.toFixed(2)} / {REPLAY_DURATION.toFixed(2)} s
+          {time.toFixed(1)} / {REPLAY_DURATION.toFixed(1)} s
         </span>
       </div>
-      <p className="replay__note">
-        全景 → 跟随 → 慢放触地 → 印记与结果。拖动时间轴可暂停并查看任意时刻，触地点与编辑器圆心一致。
-      </p>
     </div>
   )
 }

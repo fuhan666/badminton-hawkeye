@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { COURT_COLORS } from '../courtColors'
+import { DEFAULT_EXPORT_SETTINGS, EXPORT_FPS_OPTIONS } from './exportSettings'
+
+const EXPORT_FRAME_COUNT = 150
+const EXPORT_KEYFRAME_INTERVAL = 30
 import { buildReplayInput } from '../domain/direction'
 import type { ReplayInput } from '../domain/direction'
 import {
-  EXPORT_FRAME_COUNT,
-  EXPORT_KEYFRAME_INTERVAL,
   ExportCancelledError,
   ExportUnsupportedError,
   buildExportFilename,
@@ -86,34 +89,34 @@ function createFakeBackend(options: FakeOptions = {}) {
 
 describe('导出时间轴', () => {
   it('150 帧覆盖 0 到 5,000,000 µs，相邻边界差为帧时长', () => {
-    expect(frameTiming(0)).toEqual({ timestamp: 0, duration: 33333 })
-    expect(frameTiming(1)).toEqual({ timestamp: 33333, duration: 33334 })
-    expect(frameTiming(2)).toEqual({ timestamp: 66667, duration: 33333 })
-    expect(frameTiming(149).timestamp).toBe(4_966_667)
-    expect(frameTiming(149).timestamp + frameTiming(149).duration).toBe(5_000_000)
+    expect(frameTiming(0, 30)).toEqual({ timestamp: 0, duration: 33333 })
+    expect(frameTiming(1, 30)).toEqual({ timestamp: 33333, duration: 33334 })
+    expect(frameTiming(2, 30)).toEqual({ timestamp: 66667, duration: 33333 })
+    expect(frameTiming(149, 30).timestamp).toBe(4_966_667)
+    expect(frameTiming(149, 30).timestamp + frameTiming(149, 30).duration).toBe(5_000_000)
   })
 
   it('时间戳严格递增且末帧只编到 5 s', () => {
     for (let index = 1; index < EXPORT_FRAME_COUNT; index += 1) {
-      expect(frameTiming(index).timestamp).toBeGreaterThan(frameTiming(index - 1).timestamp)
+      expect(frameTiming(index, 30).timestamp).toBeGreaterThan(frameTiming(index - 1, 30).timestamp)
     }
   })
 })
 
 describe('导出进度', () => {
   it('按已编码帧数换算 0–100 并夹取越界值', () => {
-    expect(progressPercent(0)).toBe(0)
-    expect(progressPercent(75)).toBe(50)
-    expect(progressPercent(EXPORT_FRAME_COUNT)).toBe(100)
-    expect(progressPercent(EXPORT_FRAME_COUNT + 10)).toBe(100)
-    expect(progressPercent(-5)).toBe(0)
+    expect(progressPercent(0, 150)).toBe(0)
+    expect(progressPercent(75, 150)).toBe(50)
+    expect(progressPercent(EXPORT_FRAME_COUNT, 150)).toBe(100)
+    expect(progressPercent(EXPORT_FRAME_COUNT + 10, 150)).toBe(100)
+    expect(progressPercent(-5, 150)).toBe(0)
   })
 })
 
 describe('导出文件名', () => {
   it('包含赛制、落点与时间戳', () => {
-    const name = buildExportFilename(input(), new Date(2026, 10, 16, 15, 5, 7))
-    expect(name).toBe('badminton-hawkeye-doubles-x3.055-z3.200-20261116-150507.mp4')
+    const name = buildExportFilename(input(), DEFAULT_EXPORT_SETTINGS, new Date(2026, 10, 16, 15, 5, 7))
+    expect(name).toBe('badminton-hawkeye-doubles-x3.055-z3.200-1920x1080-30fps-20261116-150507.mp4')
   })
 })
 
@@ -135,7 +138,7 @@ describe('exportReplay 帧循环', () => {
     const percents: number[] = []
     const result = await exportReplay({
       input: input(),
-      courtColor: 'green',
+      palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS,
       backend: fake.backend,
       onProgress: (progress: ExportProgress) => {
         phases.push(progress.phase)
@@ -167,7 +170,7 @@ describe('exportReplay 取消与清理', () => {
     const controller = new AbortController()
     controller.abort()
     await expect(
-      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend, signal: controller.signal }),
+      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend, signal: controller.signal }),
     ).rejects.toBeInstanceOf(ExportCancelledError)
     expect(fake.stats.started).toBe(0)
     expect(fake.stats.disposed).toBe(1)
@@ -177,7 +180,7 @@ describe('exportReplay 取消与清理', () => {
     const controller = new AbortController()
     const fake = createFakeBackend({ queueSize: 9, onWait: () => controller.abort() })
     await expect(
-      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend, signal: controller.signal }),
+      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend, signal: controller.signal }),
     ).rejects.toBeInstanceOf(ExportCancelledError)
     expect(fake.stats.waits).toBe(1)
     expect(fake.encodedIndices).toHaveLength(1)
@@ -186,7 +189,7 @@ describe('exportReplay 取消与清理', () => {
 
     // 取消后可以在同一输入上重新导出成功
     const retry = createFakeBackend()
-    const result = await exportReplay({ input: input(), courtColor: 'green', backend: retry.backend })
+    const result = await exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: retry.backend })
     expect(result.frames).toBe(EXPORT_FRAME_COUNT)
     expect(retry.stats.finished).toBe(1)
   })
@@ -194,7 +197,7 @@ describe('exportReplay 取消与清理', () => {
   it('编码错误直接冒泡并释放资源', async () => {
     const fake = createFakeBackend({ error: new Error('编码失败') })
     await expect(
-      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend }),
+      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend }),
     ).rejects.toThrow('编码失败')
     expect(fake.stats.finished).toBe(0)
     expect(fake.stats.disposed).toBe(1)
@@ -203,7 +206,7 @@ describe('exportReplay 取消与清理', () => {
   it('封装失败不产出结果并释放资源', async () => {
     const fake = createFakeBackend({ finishError: new Error('封装失败') })
     await expect(
-      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend }),
+      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend }),
     ).rejects.toThrow('封装失败')
     expect(fake.stats.disposed).toBe(1)
   })
@@ -211,8 +214,48 @@ describe('exportReplay 取消与清理', () => {
   it('环境不支持时抛出可读原因，预览不受影响的提示保留', async () => {
     const fake = createFakeBackend({ unsupported: true })
     await expect(
-      exportReplay({ input: input(), courtColor: 'green', backend: fake.backend }),
+      exportReplay({ input: input(), palette: COURT_COLORS.green, settings: DEFAULT_EXPORT_SETTINGS, backend: fake.backend }),
     ).rejects.toThrow(/不支持 H\.264 1080p 编码/)
     expect(fake.stats.disposed).toBe(1)
+  })
+})
+
+
+describe('自定义导出规格', () => {
+  for (const fps of EXPORT_FPS_OPTIONS) {
+    it(`${fps} fps 覆盖完整五秒并正确上报进度`, async () => {
+      const fake = createFakeBackend()
+      const total = fps * 5
+      for (let i = 0; i < total; i += 1) {
+        const frame = frameTiming(i, fps)
+        expect(frame.duration).toBeGreaterThan(0)
+        expect(frame.timestamp + frame.duration).toBe(frameTiming(i + 1, fps).timestamp)
+      }
+      expect(frameTiming(total, fps).timestamp).toBe(5_000_000)
+      const progress: ExportProgress[] = []
+      const settings = { width: 1080, height: 1920, fps }
+      const result = await exportReplay({
+        input: input(), palette: COURT_COLORS.blue, settings, backend: fake.backend,
+        onProgress: (value) => progress.push(value),
+      })
+      expect(result.frames).toBe(total)
+      expect(fake.keyFrames).toEqual([0, fps, fps * 2, fps * 3, fps * 4])
+      expect(progress.every((value) => value.totalFrames === total)).toBe(true)
+      expect(progress.at(-1)?.percent).toBe(100)
+      expect(result.filename).toContain(`1080x1920-${fps}fps`)
+    })
+  }
+
+  it('开始后修改源配置不改变当前任务', async () => {
+    const settings = { width: 720, height: 1280, fps: 60 as const }
+    const source = input()
+    const fake = createFakeBackend({ onStart() {
+      Object.assign(settings, { width: 1920, height: 1080, fps: 24 })
+      source.landing.x = 9
+    } })
+    const result = await exportReplay({ input: source, palette: COURT_COLORS.green, settings, backend: fake.backend })
+    expect(result.frames).toBe(300)
+    expect(result.filename).toContain('x3.055-z3.200-720x1280-60fps')
+    expect(fake.keyFrames).toEqual([0, 60, 120, 180, 240])
   })
 })

@@ -5,40 +5,18 @@ import {
   Mp4OutputFormat,
   Output,
 } from 'mediabunny'
-import type { CourtColor } from '../courtColors'
+import type { CourtPalette } from '../courtColors'
+import { buildEncoderConfig } from './exportSettings'
+import type { ExportSettings } from './exportSettings'
 import type { ReplayInput } from '../domain/direction'
 import { REPLAY_DURATION, evaluateReplay } from '../domain/replay'
 import { createReplayScene } from '../replay/scene'
 import type { ReplayScene } from '../replay/scene'
 
-/**
- * 正式导出路径：固定输入按 30 fps 逐帧渲染，用 WebCodecs 编 H.264，
- * 再交给 Mediabunny 封装成 MP4。与预览共享 evaluateReplay 与同一套场景，
- * 但使用独立画布，避免干扰正在播放的预览。
- */
-
-export const EXPORT_WIDTH = 1920
-export const EXPORT_HEIGHT = 1080
-export const EXPORT_FPS = 30
-export const EXPORT_FRAME_COUNT = Math.round(EXPORT_FPS * REPLAY_DURATION)
-export const EXPORT_BITRATE = 8_000_000
-export const EXPORT_KEYFRAME_INTERVAL = EXPORT_FPS
-export const EXPORT_CODEC = 'avc1.420028'
-
 /** 背压阈值：编码队列超过该帧数时等待 dequeue 事件。 */
 const MAX_ENCODE_QUEUE = 8
 /** 每编码多少帧让出一次事件循环，让进度能绘制、取消能响应。 */
 const YIELD_EVERY_FRAMES = 5
-
-export const EXPORT_CONFIG: VideoEncoderConfig = {
-  codec: EXPORT_CODEC,
-  width: EXPORT_WIDTH,
-  height: EXPORT_HEIGHT,
-  bitrate: EXPORT_BITRATE,
-  framerate: EXPORT_FPS,
-  latencyMode: 'quality',
-  avc: { format: 'avc' },
-}
 
 export type ExportPhase =
   | 'preparing'
@@ -72,29 +50,29 @@ export class ExportUnsupportedError extends Error {
   }
 }
 
-/** 第 index 帧的时间戳边界，单位微秒；150 帧覆盖 0 → 5,000,000 µs。 */
-export function frameBoundaryUs(index: number): number {
-  return Math.round((index * 1_000_000) / EXPORT_FPS)
+/** 第 index 帧的时间戳边界，单位微秒。 */
+export function frameBoundaryUs(index: number, fps: number): number {
+  return Math.round((index * 1_000_000) / fps)
 }
 
 /** 第 index 帧的编码时间戳与时长（相邻边界之差）。 */
-export function frameTiming(index: number): { timestamp: number; duration: number } {
-  const timestamp = frameBoundaryUs(index)
-  return { timestamp, duration: frameBoundaryUs(index + 1) - timestamp }
+export function frameTiming(index: number, fps: number): { timestamp: number; duration: number } {
+  const timestamp = frameBoundaryUs(index, fps)
+  return { timestamp, duration: frameBoundaryUs(index + 1, fps) - timestamp }
 }
 
 /** 已编码帧数换算成 0–100 的整数进度。 */
 export function progressPercent(
   encodedFrames: number,
-  totalFrames = EXPORT_FRAME_COUNT,
+  totalFrames: number,
 ): number {
   if (totalFrames <= 0) return 0
   const ratio = Math.min(Math.max(encodedFrames, 0), totalFrames) / totalFrames
   return Math.round(ratio * 100)
 }
 
-export function isKeyFrame(index: number): boolean {
-  return index % EXPORT_KEYFRAME_INTERVAL === 0
+export function isKeyFrame(index: number, fps: number): boolean {
+  return index % fps === 0
 }
 
 /** 导出开始时的输入快照：后续编辑不再影响本次视频。 */
@@ -111,17 +89,17 @@ function pad(value: number): string {
 }
 
 /** 文件名带赛制、落点与本地时间，便于同一输入多次导出后区分。 */
-export function buildExportFilename(input: ReplayInput, now: Date = new Date()): string {
+export function buildExportFilename(input: ReplayInput, settings: ExportSettings, now: Date = new Date()): string {
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(
     now.getHours(),
   )}${pad(now.getMinutes())}${pad(now.getSeconds())}`
   const x = input.landing.x.toFixed(3)
   const z = input.landing.z.toFixed(3)
-  return `badminton-hawkeye-${input.format}-x${x}-z${z}-${stamp}.mp4`
+  return `badminton-hawkeye-${input.format}-x${x}-z${z}-${settings.width}x${settings.height}-${settings.fps}fps-${stamp}.mp4`
 }
 
 /** 以 isConfigSupported 为准判断能否编码，不按浏览器品牌推断。 */
-export async function checkExportSupport(): Promise<ExportSupport> {
+export async function checkExportSupport(config: VideoEncoderConfig): Promise<ExportSupport> {
   if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
     return {
       supported: false,
@@ -130,11 +108,11 @@ export async function checkExportSupport(): Promise<ExportSupport> {
   }
 
   try {
-    const result = await VideoEncoder.isConfigSupported(EXPORT_CONFIG)
+    const result = await VideoEncoder.isConfigSupported(config)
     if (!result.supported) {
       return {
         supported: false,
-        reason: '当前环境不支持 H.264 1080p 编码，无法导出 MP4；三维预览不受影响。',
+        reason: `当前环境不支持 H.264 ${config.width}×${config.height} / ${config.framerate} fps 编码。`,
       }
     }
     return { supported: true }
@@ -181,7 +159,9 @@ interface BrowserBackendState {
   blob: Blob | null
 }
 
-function createBrowserBackend(input: ReplayInput, courtColor: CourtColor): ExportBackend {
+function createBrowserBackend(input: ReplayInput, palette: CourtPalette, settings: ExportSettings): ExportBackend {
+  const config = buildEncoderConfig(settings)
+  const { width, height, fps } = settings
   const state: BrowserBackendState = {
     canvas: null,
     scene: null,
@@ -198,17 +178,17 @@ function createBrowserBackend(input: ReplayInput, courtColor: CourtColor): Expor
 
   return {
     async start(onEncoded) {
-      const support = await checkExportSupport()
+      const support = await checkExportSupport(config)
       if (!support.supported) throw new ExportUnsupportedError(support.reason)
 
       const canvas = document.createElement('canvas')
-      canvas.width = EXPORT_WIDTH
-      canvas.height = EXPORT_HEIGHT
+      canvas.width = width
+      canvas.height = height
       state.canvas = canvas
-      const scene = createReplayScene(canvas, courtColor, { pixelRatio: 1 })
+      const scene = createReplayScene(canvas, palette, { pixelRatio: 1 })
       state.scene = scene
-      scene.resize(EXPORT_WIDTH, EXPORT_HEIGHT)
-      if (canvas.width !== EXPORT_WIDTH || canvas.height !== EXPORT_HEIGHT) {
+      scene.resize(width, height)
+      if (canvas.width !== width || canvas.height !== height) {
         throw new Error(`导出画布尺寸 ${canvas.width}×${canvas.height} 与目标不一致`)
       }
 
@@ -218,7 +198,7 @@ function createBrowserBackend(input: ReplayInput, courtColor: CourtColor): Expor
         target,
       })
       const source = new EncodedVideoPacketSource('avc')
-      output.addVideoTrack(source, { frameRate: EXPORT_FPS })
+      output.addVideoTrack(source, { frameRate: fps })
       await output.start()
       state.target = target
       state.output = output
@@ -244,21 +224,21 @@ function createBrowserBackend(input: ReplayInput, courtColor: CourtColor): Expor
           state.encoderError = error instanceof Error ? error : new Error(String(error))
         },
       })
-      encoder.configure(EXPORT_CONFIG)
+      encoder.configure(config)
       state.encoder = encoder
     },
 
     renderFrame(index) {
       const scene = state.scene
       if (!scene) throw new Error('导出场景尚未创建')
-      scene.render(evaluateReplay(input, index / EXPORT_FPS))
+      scene.render(evaluateReplay(input, index / fps, width / height))
     },
 
     encodeFrame(index, keyFrame) {
       const { encoder, canvas, encoderError } = state
       if (encoderError) throw encoderError
       if (!encoder || !canvas) throw new Error('导出编码器尚未创建')
-      const { timestamp, duration } = frameTiming(index)
+      const { timestamp, duration } = frameTiming(index, fps)
       const frame = new VideoFrame(canvas, { timestamp, duration })
       try {
         encoder.encode(frame, { keyFrame })
@@ -348,7 +328,8 @@ function createBrowserBackend(input: ReplayInput, courtColor: CourtColor): Expor
 
 export interface ExportOptions {
   input: ReplayInput
-  courtColor: CourtColor
+  palette: CourtPalette
+  settings: ExportSettings
   signal?: AbortSignal
   onProgress?: (progress: ExportProgress) => void
   /** 测试注入点：默认使用浏览器 WebCodecs 后端 */
@@ -407,15 +388,19 @@ function waitForDequeueOrAbort(
 export async function exportReplay(options: ExportOptions): Promise<ExportResult> {
   const { signal, onProgress } = options
   const input = freezeExportInput(options.input)
-  const backend = options.backend ?? createBrowserBackend(input, options.courtColor)
+  const settings = { ...options.settings }
+  const palette = { ...options.palette }
+  buildEncoderConfig(settings)
+  const totalFrames = Math.round(settings.fps * REPLAY_DURATION)
+  const backend = options.backend ?? createBrowserBackend(input, palette, settings)
 
   let encodedFrames = 0
   const emit = (phase: ExportPhase, frames = encodedFrames) => {
     onProgress?.({
       phase,
       encodedFrames: frames,
-      totalFrames: EXPORT_FRAME_COUNT,
-      percent: progressPercent(frames),
+      totalFrames,
+      percent: progressPercent(frames, totalFrames),
     })
   }
 
@@ -428,10 +413,10 @@ export async function exportReplay(options: ExportOptions): Promise<ExportResult
     })
     throwIfAborted(signal)
 
-    for (let index = 0; index < EXPORT_FRAME_COUNT; index += 1) {
+    for (let index = 0; index < totalFrames; index += 1) {
       throwIfAborted(signal)
       backend.renderFrame(index)
-      backend.encodeFrame(index, isKeyFrame(index))
+      backend.encodeFrame(index, isKeyFrame(index, settings.fps))
       const error = backend.getError()
       if (error) throw error
 
@@ -453,12 +438,12 @@ export async function exportReplay(options: ExportOptions): Promise<ExportResult
     throwIfAborted(signal)
 
     const blob = backend.getResult()
-    emit('finalizing', EXPORT_FRAME_COUNT)
+    emit('finalizing', totalFrames)
     return {
       blob,
-      filename: buildExportFilename(input),
-      frames: EXPORT_FRAME_COUNT,
-      keyFrames: Math.ceil(EXPORT_FRAME_COUNT / EXPORT_KEYFRAME_INTERVAL),
+      filename: buildExportFilename(input, settings),
+      frames: totalFrames,
+      keyFrames: Math.ceil(totalFrames / settings.fps),
     }
   } catch (error) {
     if (error instanceof ExportCancelledError || signal?.aborted) {

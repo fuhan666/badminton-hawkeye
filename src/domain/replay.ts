@@ -274,10 +274,10 @@ const FOLLOW_FOV = 34
  * 跟随段的相对机位：相对球体固定，整段里球在画面中的位置不变，
  * 只有球飞过时带出的球场、网与边线在变。
  */
-function followPose(ball: Vec3, flight: Flight): { position: Vec3; target: Vec3 } {
+function followPose(ball: Vec3, flight: Flight, aspect: number): { position: Vec3; target: Vec3 } {
   const dir = flight.dir
   const perp = { x: -dir.z, z: dir.x }
-  return {
+  return fitAspect({
     position: {
       x: ball.x - dir.x * 2.7 + perp.x * 2.0,
       y: ball.y + 1.55,
@@ -288,7 +288,7 @@ function followPose(ball: Vec3, flight: Flight): { position: Vec3; target: Vec3 
       y: ball.y - 0.35,
       z: ball.z + dir.z * 0.5,
     },
-  }
+  }, aspect)
 }
 
 /**
@@ -302,7 +302,7 @@ const FRAMING_FOV = 30
 const LINE_CONTEXT = 0.42
 /** 落到边线附近（向内或向外）多少米内视为需要该线入画 */
 const LINE_NEAR = 1.2
-/** 16:9 画面里构图点允许出现的范围，避开结果牌占据的底部 */
+/** 构图点允许出现的归一化范围，避开结果牌占据的底部 */
 const FRAME_LIMIT_X = 0.74
 const FRAME_LIMIT_TOP = 0.66
 const FRAME_LIMIT_BOTTOM = -0.6
@@ -310,7 +310,21 @@ const FRAME_LIMIT_BOTTOM = -0.6
 const CONTACT_LIMIT_X = 0.4
 const CONTACT_LIMIT_TOP = 0.3
 const CONTACT_LIMIT_BOTTOM = -0.45
-const FRAME_ASPECT = 16 / 9
+const BASE_ASPECT = 16 / 9
+
+/** 窄画幅沿视线后移，保留主体横向空间，垂直 FOV 不变。 */
+function fitAspect<T extends { position: Vec3; target: Vec3 }>(pose: T, aspect: number): T {
+  const scale = Math.max(1, BASE_ASPECT / aspect)
+  return {
+    ...pose,
+    position: {
+      x: pose.target.x + (pose.position.x - pose.target.x) * scale,
+      y: pose.target.y + (pose.position.y - pose.target.y) * scale,
+      z: pose.target.z + (pose.position.z - pose.target.z) * scale,
+    },
+  }
+}
+
 /** 机位高度随水平距离抬升，近景也是 55°–70° 的俯角，画面以地面为主 */
 const FRAMING_HEIGHT_BASE = 0.4
 const FRAMING_HEIGHT_PER_M = 1.5
@@ -501,6 +515,7 @@ function projectGround(
   target: Vec3,
   fov: number,
   point: GroundPoint,
+  aspect: number,
 ): { x: number; y: number } | null {
   const forward = normalize(sub(target, position))
   if (forward.x === 0 && forward.y === 0 && forward.z === 0) return null
@@ -511,7 +526,7 @@ function projectGround(
   if (depth < 0.2) return null
   const tan = Math.tan((fov * Math.PI) / 360)
   return {
-    x: dot(rel, right) / (depth * tan * FRAME_ASPECT),
+    x: dot(rel, right) / (depth * tan * aspect),
     y: dot(rel, up) / (depth * tan),
   }
 }
@@ -532,7 +547,7 @@ function nearNet(position: Vec3): boolean {
  * 由落点反解近景机位：固定 FOV 与机位方向，从近到远找能把落点与所需线带
  * 都收进安全范围内的最小距离，避免手动调参在四边四角间顾此失彼。
  */
-function framingPose(landing: GroundPoint, plan: FramingPlan, flight: Flight): CameraKey {
+function framingPose(landing: GroundPoint, plan: FramingPlan, flight: Flight, aspect: number): CameraKey {
   const direction = framingDirection(plan, flight)
   const target: Vec3 = {
     x: landing.x - plan.outward.x * FRAMING_TARGET_SHIFT,
@@ -558,7 +573,7 @@ function framingPose(landing: GroundPoint, plan: FramingPlan, flight: Flight): C
 
   const fits = (pose: CameraKey): boolean => {
     if (nearNet(pose.position)) return false
-    const contact = projectGround(pose.position, pose.target, pose.fov, landing)
+    const contact = projectGround(pose.position, pose.target, pose.fov, landing, aspect)
     if (
       !contact ||
       Math.abs(contact.x) > CONTACT_LIMIT_X ||
@@ -568,7 +583,7 @@ function framingPose(landing: GroundPoint, plan: FramingPlan, flight: Flight): C
       return false
     }
     return points.every((point) => {
-      const ndc = projectGround(pose.position, pose.target, pose.fov, point)
+      const ndc = projectGround(pose.position, pose.target, pose.fov, point, aspect)
       if (!ndc) return false
       return (
         Math.abs(ndc.x) <= FRAME_LIMIT_X &&
@@ -581,9 +596,10 @@ function framingPose(landing: GroundPoint, plan: FramingPlan, flight: Flight): C
   // 低机位不越过球网：停在落点同一侧，避免网面糊在镜头前
   const crossingDistance = (Math.abs(landing.z) - 0.35) / Math.max(Math.abs(direction.z), 1e-6)
   const staysSameSide = direction.z * landing.z > 0
+  const distanceLimit = 9 * Math.max(1, BASE_ASPECT / aspect)
   const maxDistance = staysSameSide
-    ? clamp(crossingDistance, FRAMING_DISTANCE_MIN, 9)
-    : 9
+    ? clamp(crossingDistance, FRAMING_DISTANCE_MIN, distanceLimit)
+    : distanceLimit
 
   for (let distance = FRAMING_DISTANCE_MIN; distance <= maxDistance + 1e-9; distance += 0.02) {
     const pose = poseAt(distance)
@@ -610,7 +626,7 @@ function netGuardKey(from: CameraKey, to: CameraKey): CameraKey | null {
   }
 }
 
-function buildCameraKeys(flight: Flight, format: MatchFormat): CameraKey[] {
+function buildCameraKeys(flight: Flight, format: MatchFormat, aspect: number): CameraKey[] {
   const dir = flight.dir
   const perp = { x: -dir.z, z: dir.x }
   const landing = flight.landing
@@ -620,10 +636,10 @@ function buildCameraKeys(flight: Flight, format: MatchFormat): CameraKey[] {
 
   const followEnd: CameraKey = {
     t: FOLLOW_END,
-    ...followPose(slowBall, flight),
+    ...followPose(slowBall, flight, aspect),
     fov: FOLLOW_FOV,
   }
-  const framing = framingPose(landing, framingPlan(landing, format, dir), flight)
+  const framing = framingPose(landing, framingPlan(landing, format, dir), flight, aspect)
   const contact: CameraKey = { ...framing, t: CONTACT_TIME }
   // 定格只做小幅前推：沿原视线靠近落点，视点与 FOV 几乎不动
   const pushIn = 0.055
@@ -636,7 +652,7 @@ function buildCameraKeys(flight: Flight, format: MatchFormat): CameraKey[] {
   }
 
   const keys: CameraKey[] = [
-    {
+    fitAspect({
       t: 0,
       // 高角度俯瞰：站在来球一侧后方，整片球场与球网都收进画面
       position: {
@@ -646,10 +662,10 @@ function buildCameraKeys(flight: Flight, format: MatchFormat): CameraKey[] {
       },
       target: { x: 0, y: 0.2, z: 0 },
       fov: 50,
-    },
+    }, aspect),
     {
       t: OVERVIEW_END,
-      ...followPose(followBall, flight),
+      ...followPose(followBall, flight, aspect),
       fov: FOLLOW_FOV,
     },
     followEnd,
@@ -714,11 +730,11 @@ function segmentAt(time: number): ReplaySegment {
 }
 
 /** 计算给定输入与时刻的完整回放状态；纯函数，同一输入同一时刻逐字段相等 */
-export function evaluateReplay(input: ReplayInput, time: number): ReplayFrame {
+export function evaluateReplay(input: ReplayInput, time: number, aspect = BASE_ASPECT): ReplayFrame {
   const clampedTime = clamp(time, 0, REPLAY_DURATION)
   const flight = buildFlight(input)
   const progress = flightProgressAt(clampedTime)
-  const cameraKeys = buildCameraKeys(flight, input.format)
+  const cameraKeys = buildCameraKeys(flight, input.format, aspect)
   const view = cameraAt(cameraKeys, clampedTime)
 
   const landed = clampedTime >= CONTACT_TIME

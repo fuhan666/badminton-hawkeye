@@ -283,7 +283,7 @@ async function main() {
   }
 
   const readoutExpression = `(() => {
-    const values = [...document.querySelectorAll('.readout dd small')].map((node) => node.textContent.trim());
+    const values = [...document.querySelectorAll('.readout dd')].map((node) => node.textContent.trim());
     return JSON.stringify(values);
   })()`
 
@@ -361,7 +361,8 @@ async function main() {
     const track = bar?.querySelector('[role="progressbar"]');
     const buttons = [...document.querySelectorAll('.actions .action')];
     const exportButton = buttons.at(-1);
-    const readout = [...document.querySelectorAll('.readout dd small')].map((node) => node.textContent.trim());
+    const readout = [...document.querySelectorAll('.readout dd')].map((node) => node.textContent.trim());
+    const incoming = document.querySelector('[data-role="incoming-handle"]');
     return JSON.stringify({
       phase: bar?.dataset.exportPhase ?? null,
       percent: track ? Number(track.getAttribute('aria-valuenow')) : null,
@@ -372,10 +373,7 @@ async function main() {
       previewCanvas: Boolean(document.querySelector('.replay canvas, .replay__stage canvas, canvas')),
       format: [...document.querySelectorAll('.format__button')].find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent?.trim() ?? null,
       landingMm: readout.slice(0, 2),
-      directionNote: document.querySelector('.direction__note')?.textContent?.trim() ?? null,
-      directionAlert: document.querySelector('.direction__alert')?.textContent?.trim() ?? null,
-      directionUnit: document.querySelector('.direction__note')?.textContent?.match(/\\(([-\\d.]+), ([-\\d.]+)\\)/)?.[0] ?? null,
-      distanceMm: document.querySelector('.direction__note')?.textContent?.match(/(\\d+) mm/)?.[1] ?? null,
+      incomingMm: incoming ? { x: Math.round(Number(incoming.getAttribute('cx')) * 1000), z: Math.round(Number(incoming.getAttribute('cy')) * 1000) } : null,
       downloadLabel: buttons.at(-1)?.textContent ?? null,
     });
   })()`
@@ -467,8 +465,6 @@ async function main() {
       expected,
       actual: actualVerdict,
       landingMm: status.landingMm,
-      directionUnit: status.directionUnit,
-      distanceMm: status.distanceMm,
       pass,
     }
     report.scenarios.push(entry)
@@ -565,8 +561,8 @@ async function main() {
     const farDirection = await readStatus()
     const farHash = await capturePreviewFrame('same-direction-far-3.2s.png', 3.2)
     const sameDirection = {
-      near: { unit: nearDirection.directionUnit, distanceMm: nearDirection.distanceMm },
-      far: { unit: farDirection.directionUnit, distanceMm: farDirection.distanceMm },
+      near: { landingMm: nearDirection.landingMm, incomingMm: nearDirection.incomingMm },
+      far: { landingMm: farDirection.landingMm, incomingMm: farDirection.incomingMm },
       previewHashEqual: nearHash === farHash,
       nearHash,
       farHash,
@@ -574,9 +570,9 @@ async function main() {
     report.sameDirection = sameDirection
     report.scenarios.push({
       name: '同方向不同距离（来向 3.055,0 与 3.055,-3.2）',
-      expected: '相同单位方向与相同回放画面',
-      actual: `${nearDirection.directionUnit ?? 'none'} / ${farDirection.directionUnit ?? 'none'}，画面哈希${nearHash === farHash ? '相同' : '不同'}`,
-      pass: Boolean(nearDirection.directionUnit) && nearDirection.directionUnit === farDirection.directionUnit && nearHash === farHash,
+      expected: '相同回放画面',
+      actual: `画面哈希${nearHash === farHash ? '相同' : '不同'}`,
+      pass: nearHash === farHash,
     })
     if (report.scenarios.at(-1).pass === false) report.failures.push('同方向不同距离的回放画面不一致')
 

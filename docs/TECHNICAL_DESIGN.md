@@ -104,7 +104,7 @@ SVG 负责全场选点和局部精调，两者用同一份米制数据与坐标�
 
 ### 确定性内核
 
-`src/domain/replay.ts` 导出 `evaluateReplay(input, time)`，输入为既有的 `ReplayInput { format, landing, direction }`，输出是普通对象：
+`src/domain/replay.ts` 导出 `evaluateReplay(input, time, aspect)`，输入为既有的 `ReplayInput { format, landing, direction }`，输出是普通对象：
 
 ```ts
 interface ReplayFrame {
@@ -159,17 +159,17 @@ MPL-2.0 是文件级弱 copyleft：本项目只通过 npm 引用未修改的包�
 
 ### 编码参数
 
-固定 1920×1080 / 30 fps / 5 s / 150 帧 / 无音轨，与 PRD 建议一致：
+默认 1920×1080 / 30 fps，时长固定 5 s、无音轨；宽高和 fps 由导出设置指定：
 
-- 编码 `avc1.420028`（H.264 Baseline，Level 4.0），码率 8 Mbps，`avc: { format: 'avc' }`，每 30 帧一个关键帧（共 5 个）。
-- 采样 `t = 帧序号 / 帧率`，只编 `i = 0…149`，不再编 `t = 5 s` 的第 151 帧；第 `i` 帧 `timestamp = round(i × 10⁶ / 30)`，`duration` 取相邻边界之差，首帧 0 µs、末帧结束 5,000,000 µs。
+- `src/export/exportSettings.ts` 按宏块数、宏块率、单边宏块限制和码率生成 H.264 Baseline level；1080p30 为 Level 4.0，1080p60 为 4.2，4K30 为 5.1，4K60 为 5.2。码率以 1080p30 的 8 Mbps 为基线按像素数和 fps 同比例计算。`avc: { format: 'avc' }`，每秒一个关键帧（共 5 个）。
+- 采样 `t = 帧序号 / 帧率`，只编 `i = 0…(5 × fps − 1)`，不额外编码 `t = 5 s`；第 `i` 帧 `timestamp = round(i × 10⁶ / fps)`，`duration` 取相邻边界之差，首帧 0 µs、末帧结束 5,000,000 µs。
 - 画布渲染像素比固定为 1（`createReplayScene(canvas, { pixelRatio: 1 })`），否则设备 DPR 会把画布放大成非目标尺寸。
 
 ### 实现要点
 
 `render` 之后立刻用同一 canvas 构造 `VideoFrame`，避免绘制缓冲被清空；编码回调里把 `EncodedVideoChunk` 转成 `EncodedPacket` 后按序串行 `await source.add(packet, meta)`，首包必须带编码器给的 `decoderConfig`，否则 MP4 缺 `avcC`；`encoder.flush()` 只保证编码结束，之后还要等写入链完成，再 `source.close()` 与 `output.finalize()`；编码错误与封装错误分别记录并冒泡，不能只等 flush 就判定成功；`encodeQueueSize` 超过 8 时等 `dequeue` 事件做背压。
 
-### 实测结果
+### 初始 1080p30 实测结果（2026-11-16）
 
 验证工具在 `tools/mp4-probe`，命令见 README。固定双打输入：落点 `(3.055, 3.2)`、来向点 `(3.055, 0)`，即单位方向 `(0, 1)`。
 
@@ -198,16 +198,16 @@ MPL-2.0 是文件级弱 copyleft：本项目只通过 npm 引用未修改的包�
 
 实现位于 `src/export/exportReplay.ts`（编码、封装、清理）与 `src/export/useExportJob.ts`（单任务、进度、下载）。
 
-1. 点击导出时复制赛制、落点与单位方向作为快照，并固定当前地胶颜色，之后继续编辑或换色不改变本次视频；同时只允许一个活动任务。
-2. 能力判断：`VideoEncoder` / `VideoFrame` 缺失，或 `isConfigSupported` 对完整 1080p30 配置返回 false / 拒绝，都给出“当前环境不支持视频导出”的可见提示，预览照常。
-3. 独立画布 1920×1080 + `createReplayScene(canvas, courtColor, { pixelRatio: 1 })`，不抓取预览画布；按 `t = i / 30` 调 `evaluateReplay` 渲染 150 帧。
-4. 每帧构造 `VideoFrame` 后立即编码并关闭；`keyFrame` 取 `i % 30 === 0`。`encodeQueueSize > 8` 时等待 `dequeue` 背压，每 5 帧让出一次事件循环。
+1. 点击导出时复制赛制、落点、单位方向、完整色板、宽高和 fps 作为快照；之后继续编辑不改变本次视频，同时只允许一个活动任务。
+2. 能力判断：`VideoEncoder` / `VideoFrame` 缺失，或 `isConfigSupported` 对所选完整配置返回 false / 拒绝，都给出“当前环境不支持视频导出”的可见提示，预览照常。
+3. 独立画布使用所选宽高和 `createReplayScene(canvas, palette, { pixelRatio: 1 })`，检查 WebGL 尺寸限制；按 `t = i / fps` 调 `evaluateReplay(input, t, width / height)` 渲染 `5 × fps` 帧。
+4. 每帧构造 `VideoFrame` 后立即编码并关闭；`keyFrame` 取 `i % fps === 0`。`encodeQueueSize > 8` 时等待 `dequeue` 背压，每 5 帧让出一次事件循环。
 5. 进度按编码回调确认的帧数换算 0–100%，界面区分准备、编码、封装、收尾；封装完成前不宣告成功。
 6. 取消通过 `AbortController` 在每次送帧、背压等待、flush 后、写入链后、finalize 前检查；取消后立即停止送帧，关闭编码器并 `output.cancel()` 丢弃半成品，不建立下载。编码或封装错误同样冒泡，不能被 flush 成功掩盖。
 7. 成功路径：`flush()` → 等写入链 → `source.close()` → `output.finalize()` → 取 `BufferTarget` 生成 Blob → 自动下载带落点与时间戳的文件名；下载 URL 在使用后撤销。
 8. 成功、失败、取消与组件卸载都进入统一清理：关闭 `VideoEncoder`、取消未完成的封装、`scene.dispose()` 并清空画布与缓冲引用。
 
-单元测试在 `src/export/exportReplay.test.ts`，用假后端覆盖帧时间轴、进度换算、输入快照、150 帧送帧与关键帧位置、背压期间取消、取消后重试、编码/封装错误和不支持提示。正式界面路径由 `tools/export-smoke` 在真实浏览器中覆盖成功、取消、重试、OUT 结果与不支持提示。
+单元测试在 `src/export/exportReplay.test.ts`，用假后端覆盖帧时间轴、进度换算、输入快照、五档帧率的送帧与关键帧位置、背压期间取消、取消后重试、编码/封装错误和不支持提示。正式界面路径由 `tools/export-smoke` 在真实浏览器中覆盖成功、取消、重试、OUT 结果与不支持提示。
 
 
 ## 验证与交付
@@ -215,3 +215,12 @@ MPL-2.0 是文件级弱 copyleft：本项目只通过 npm 引用未修改的包�
 重点测试圆与矩形相交、相切、角落、赛制切换、坐标转换和方向一致性。用代表性样片检查构图与触地效果，实际播放导出文件验证时长和画面。
 
 项目 README 提供安装、启动、构建和使用步骤，记录实际验证的浏览器环境。依赖与素材适合开源分发；开源许可证由项目所有者确定。
+
+
+## 自定义配色与浏览器设置
+
+`courtColors.ts` 定义完整色板和三套预设。二维与三维原有展示色值保留在色板中；用户编辑同一用途时统一更新对应值。SVG、CSS、三维场景和导出接收同一份解析后的色板。`setPalette` 更新材质、背景、雾和结果牌纹理，不重建场景；替换纹理后释放旧纹理，保留预览播放状态。
+
+`settings/appSettings.ts` 校验 localStorage 中的完整设置，`useAppSettings` 负责启动读取与变更保存。首次使用、读取失败或数据损坏时静默采用默认设置，存储可写时随后覆盖损坏记录；浏览器禁用存储时只在当前页面生效。
+
+目标画幅由宽高计算。`domain/replay.ts` 为全景和跟随机位保留横向空间，近景投影使用实际 aspect 求解距离；三维结果牌同时约束横向和纵向尺寸。预览等比缩放且高度不超过 480 px，导出按目标像素渲染。颜色、分辨率和 fps 均不改变运动时间线、接触半径和几何判定。

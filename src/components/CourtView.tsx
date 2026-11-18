@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
-import type { CourtColor } from '../courtColors'
+import type { CourtPalette } from '../courtColors'
+import { isInsideCourt } from '../domain/judgement'
 import { CONTACT_RADIUS } from '../domain/court'
 import type { GroundPoint, MatchFormat } from '../domain/court'
 import { isNudgeKey, nudgePoint } from '../domain/editing'
@@ -15,7 +16,7 @@ export type EditTarget = 'landing' | 'incoming'
 interface CourtViewProps {
   variant: CourtViewVariant
   format: MatchFormat
-  courtColor: CourtColor
+  palette: CourtPalette
   landing: GroundPoint
   incoming: GroundPoint | null
   target: EditTarget
@@ -29,7 +30,6 @@ const HANDLE_RADIUS: Record<CourtViewVariant, number> = {
   zoom: 0.03,
 }
 
-const LANDING_COLOR = '#facc15'
 const INCOMING_COLOR = '#38bdf8'
 
 function pointFromEvent(svg: SVGSVGElement, event: { clientX: number; clientY: number }) {
@@ -45,7 +45,7 @@ function pointFromEvent(svg: SVGSVGElement, event: { clientX: number; clientY: n
 export default function CourtView({
   variant,
   format,
-  courtColor,
+  palette,
   landing,
   incoming,
   target,
@@ -62,6 +62,7 @@ export default function CourtView({
   const view = variant === 'full' ? FULL_VIEW : (frozenView ?? zoomView(focus))
   const handleRadius = HANDLE_RADIUS[variant]
   const direction = resolveDirection(landing, incoming)
+  const landingColor = isInsideCourt(landing, format) ? palette.editorMarkerIn : palette.editorMarkerOut
   const coincident = direction.issue === 'coincident'
   const arrowId = `arrow-${variant}`
   // 局部窗口只有 0.24 m 宽，来向点不在窗口内时画线只剩噪声，故只在全场视图提示指向。
@@ -143,88 +144,91 @@ export default function CourtView({
   }
 
   return (
-    <svg
-      ref={svgRef}
-      className={`court-view court-view--${variant}`}
-      viewBox={toViewBoxString(view)}
-      preserveAspectRatio="xMidYMid meet"
-      role="application"
-      aria-label={
-        variant === 'full'
-          ? '全场选点：点击放置当前目标，拖动黄色或蓝色手柄，方向键微调'
-          : '局部精调：拖动当前目标手柄，方向键 1 毫米、Shift 10 毫米微调'
-      }
-      tabIndex={0}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onKeyDown={handleKeyDown}
-    >
-      <defs>
-        <marker
-          id={arrowId}
-          viewBox="0 0 10 10"
-          refX={8}
-          refY={5}
-          markerWidth={4}
-          markerHeight={4}
-          orient="auto-start-reverse"
-          markerUnits="strokeWidth"
-        >
-          <path d="M 0 0 L 10 5 L 0 10 z" fill={INCOMING_COLOR} />
-        </marker>
-      </defs>
+    <>
+      <svg
+        ref={svgRef}
+        className={`court-view court-view--${variant}`}
+        viewBox={toViewBoxString(view)}
+        preserveAspectRatio="xMidYMid meet"
+        role="application"
+        aria-label={
+          variant === 'full'
+            ? '全场选点：点击放置当前目标，拖动落点或来向点手柄，方向键 1 毫米、Shift 10 毫米微调'
+            : '局部精调：拖动当前目标手柄，方向键 1 毫米、Shift 10 毫米微调'
+        }
+        tabIndex={0}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onKeyDown={handleKeyDown}
+      >
+        <defs>
+          <marker
+            id={arrowId}
+            viewBox="0 0 10 10"
+            refX={8}
+            refY={5}
+            markerWidth={4}
+            markerHeight={4}
+            orient="auto-start-reverse"
+            markerUnits="strokeWidth"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={INCOMING_COLOR} />
+          </marker>
+        </defs>
 
-      <CourtGeometry format={format} courtColor={courtColor}>
-        <g pointerEvents="none">
-          {showArrow && incoming ? (
-            <line
-              x1={landing.x}
-              y1={landing.z}
-              x2={incoming.x}
-              y2={incoming.z}
-              stroke={INCOMING_COLOR}
-              strokeWidth={variant === 'full' ? 0.045 : 0.0045}
-              strokeDasharray={variant === 'full' ? '0.14 0.08' : '0.018 0.012'}
-              markerEnd={`url(#${arrowId})`}
-            />
-          ) : null}
+        <CourtGeometry format={format} palette={palette}>
+          <g pointerEvents="none">
+            {showArrow && incoming ? (
+              <line
+                x1={landing.x}
+                y1={landing.z}
+                x2={incoming.x}
+                y2={incoming.z}
+                stroke={INCOMING_COLOR}
+                strokeWidth={variant === 'full' ? 0.045 : 0.0045}
+                strokeDasharray={variant === 'full' ? '0.14 0.08' : '0.018 0.012'}
+                markerEnd={`url(#${arrowId})`}
+              />
+            ) : null}
 
-          <circle
-            data-role="contact"
-            cx={landing.x}
-            cy={landing.z}
-            r={CONTACT_RADIUS}
-            fill={LANDING_COLOR}
-            stroke="#0b1a13"
-            strokeWidth={0.003}
-          />
-          <circle
-            data-role="landing-handle"
-            cx={landing.x}
-            cy={landing.z}
-            r={handleRadius}
-            fill="rgba(250, 204, 21, 0.16)"
-            stroke={target === 'landing' ? LANDING_COLOR : 'rgba(250, 204, 21, 0.55)'}
-            strokeWidth={variant === 'full' ? 0.012 : 0.0035}
-            strokeDasharray={variant === 'full' ? '0.06 0.04' : '0.012 0.008'}
-          />
-
-          {incoming ? (
             <circle
-              data-role="incoming-handle"
-              cx={incoming.x}
-              cy={incoming.z}
-              r={handleRadius * 0.82}
-              fill={coincident ? 'rgba(248, 113, 113, 0.25)' : 'rgba(56, 189, 248, 0.18)'}
-              stroke={coincident ? '#f87171' : target === 'incoming' ? INCOMING_COLOR : 'rgba(56, 189, 248, 0.6)'}
-              strokeWidth={variant === 'full' ? 0.012 : 0.0035}
-              strokeDasharray={variant === 'full' ? '0.05 0.04' : '0.01 0.008'}
+              data-role="contact"
+              cx={landing.x}
+              cy={landing.z}
+              r={CONTACT_RADIUS}
+              fill={landingColor}
+              stroke="#0b1a13"
+              strokeWidth={0.003}
             />
-          ) : null}
-        </g>
-      </CourtGeometry>
-    </svg>
+            <circle
+              data-role="landing-handle"
+              cx={landing.x}
+              cy={landing.z}
+              r={handleRadius}
+              fill={`${landingColor}29`}
+              stroke={target === 'landing' ? landingColor : `${landingColor}8c`}
+              strokeWidth={variant === 'full' ? 0.012 : 0.0035}
+              strokeDasharray={variant === 'full' ? '0.06 0.04' : '0.012 0.008'}
+            />
+
+            {incoming ? (
+              <circle
+                data-role="incoming-handle"
+                cx={incoming.x}
+                cy={incoming.z}
+                r={handleRadius * 0.82}
+                fill={coincident ? 'rgba(248, 113, 113, 0.25)' : 'rgba(56, 189, 248, 0.18)'}
+                stroke={coincident ? '#f87171' : target === 'incoming' ? INCOMING_COLOR : 'rgba(56, 189, 248, 0.6)'}
+                strokeWidth={variant === 'full' ? 0.012 : 0.0035}
+                strokeDasharray={variant === 'full' ? '0.05 0.04' : '0.01 0.008'}
+              />
+            ) : null}
+          </g>
+        </CourtGeometry>
+      </svg>
+      <p className="court-shortcut">方向键 1 mm · Shift + 方向键 10 mm</p>
+    </>
   )
 }

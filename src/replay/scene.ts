@@ -1,6 +1,5 @@
 import * as THREE from 'three'
-import { COURT_COLORS } from '../courtColors'
-import type { CourtColor } from '../courtColors'
+import type { CourtPalette } from '../courtColors'
 import { CONTACT_RADIUS, COURT, LINE } from '../domain/court'
 import type { ReplayFrame } from '../domain/replay'
 
@@ -11,14 +10,10 @@ import type { ReplayFrame } from '../domain/replay'
 
 export interface ReplayScene {
   render(frame: ReplayFrame): void
-  setCourtColor(color: CourtColor): void
+  setPalette(palette: CourtPalette): void
   resize(width: number, height: number): void
   dispose(): void
 }
-
-const LINE_COLOR = 0xf8fafc
-const MARKER_IN = 0xfbbf24
-const MARKER_OUT = 0xf87171
 
 const FORWARD = new THREE.Vector3(0, 0, 1)
 const MARKER_Y = 0.006
@@ -169,13 +164,12 @@ function createShuttle(): Shuttle {
   return { group, materials: [corkMaterial, skirtMaterial, rimMaterial] }
 }
 
-function createPlateTexture(text: 'IN' | 'OUT'): THREE.CanvasTexture {
+function createPlateTexture(text: 'IN' | 'OUT', accent: string): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
   canvas.width = 512
   canvas.height = 160
   const context = canvas.getContext('2d')
   if (context) {
-    const accent = text === 'IN' ? '#4ade80' : '#f87171'
     context.clearRect(0, 0, canvas.width, canvas.height)
     context.fillStyle = 'rgba(6, 16, 14, 0.86)'
     context.strokeStyle = accent
@@ -217,10 +211,10 @@ export interface ReplaySceneOptions {
 
 export function createReplayScene(
   canvas: HTMLCanvasElement,
-  courtColor: CourtColor,
+  palette: CourtPalette,
   options: ReplaySceneOptions = {},
 ): ReplayScene {
-  const palette = COURT_COLORS[courtColor]
+  let currentPalette = palette
   const renderer = new THREE.WebGLRenderer({
     canvas,
     antialias: true,
@@ -263,7 +257,7 @@ export function createReplayScene(
   surface.rotation.x = -Math.PI / 2
   scene.add(surface)
 
-  const lineMaterial = new THREE.MeshBasicMaterial({ color: LINE_COLOR })
+  const lineMaterial = new THREE.MeshBasicMaterial({ color: palette.line })
   addCourtLines(scene, lineMaterial)
   addNet(scene)
 
@@ -271,7 +265,7 @@ export function createReplayScene(
   scene.add(shuttle.group)
 
   const markerMaterial = new THREE.MeshBasicMaterial({
-    color: MARKER_IN,
+    color: palette.markerIn,
     transparent: true,
     opacity: 0,
     depthWrite: false,
@@ -283,8 +277,8 @@ export function createReplayScene(
   scene.add(marker)
 
   const plateTextures: Record<'IN' | 'OUT', THREE.CanvasTexture> = {
-    IN: createPlateTexture('IN'),
-    OUT: createPlateTexture('OUT'),
+    IN: createPlateTexture('IN', palette.resultIn),
+    OUT: createPlateTexture('OUT', palette.resultOut),
   }
   const plateMaterials: Record<'IN' | 'OUT', THREE.SpriteMaterial> = {
     IN: new THREE.SpriteMaterial({
@@ -331,13 +325,13 @@ export function createReplayScene(
 
     marker.position.set(frame.marker.center.x, MARKER_Y, frame.marker.center.z)
     markerMaterial.opacity = frame.marker.opacity
-    markerMaterial.color.setHex(frame.verdict === 'IN' ? MARKER_IN : MARKER_OUT)
+    markerMaterial.color.set(frame.verdict === 'IN' ? currentPalette.markerIn : currentPalette.markerOut)
     marker.visible = frame.marker.opacity > 0.002
 
     // 结果牌固定在画面下方，随 FOV 换算尺寸，保证导出时始终同屏可读
     const distance = 1.2
     const halfHeight = Math.tan((frame.camera.fov * Math.PI) / 360) * distance
-    const plateHeight = halfHeight * 0.17
+    const plateHeight = Math.min(halfHeight * 0.17, halfHeight * camera.aspect * 0.5)
     const plateWidth = plateHeight * 3.2
     for (const key of ['IN', 'OUT'] as const) {
       const active = key === frame.verdict && frame.resultOpacity > 0.002
@@ -350,16 +344,33 @@ export function createReplayScene(
     renderer.render(scene, camera)
   }
 
-  function setCourtColor(color: CourtColor) {
-    const next = COURT_COLORS[color]
+  function setPalette(next: CourtPalette) {
     surface.material.color.set(next.surface)
     ground.material.color.set(next.surround)
+    lineMaterial.color.set(next.line)
     renderer.setClearColor(next.background, 1)
     fog.color.set(next.background)
+    for (const verdict of ['IN', 'OUT'] as const) {
+      const key = verdict === 'IN' ? 'resultIn' : 'resultOut'
+      if (currentPalette[key] === next[key]) continue
+      const previous = plateTextures[verdict]
+      plateTextures[verdict] = createPlateTexture(verdict, next[key])
+      plateMaterials[verdict].map = plateTextures[verdict]
+      plateMaterials[verdict].needsUpdate = true
+      previous.dispose()
+    }
+    currentPalette = next
   }
 
   function resize(width: number, height: number) {
     if (width <= 0 || height <= 0) return
+    const gl = renderer.getContext()
+    const maxSize = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE))
+    const maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array
+    const ratio = renderer.getPixelRatio()
+    if (width * ratio > Math.min(maxSize, maxViewport[0]) || height * ratio > Math.min(maxSize, maxViewport[1])) {
+      throw new Error(`当前设备无法渲染 ${width}×${height} 画布。`)
+    }
     renderer.setSize(width, height, false)
     camera.aspect = width / height
     camera.updateProjectionMatrix()
@@ -379,5 +390,5 @@ export function createReplayScene(
     renderer.dispose()
   }
 
-  return { render, setCourtColor, resize, dispose }
+  return { render, setPalette, resize, dispose }
 }

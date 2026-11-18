@@ -5,6 +5,7 @@
 - [产品需求](PRD.md)
 - [技术方案](TECHNICAL_DESIGN.md)
 - [开发规划](DELIVERY_PLAN.md)
+- [自定义导出与配色](EXPORT_AND_PALETTE_PLAN.md)
 
 ## 任务跟踪
 

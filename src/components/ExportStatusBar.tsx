@@ -10,10 +10,10 @@ const RUNNING_PHASES = ['preparing', 'encoding', 'muxing', 'finalizing', 'cancel
 
 const TITLES: Record<ExportStatus['phase'], string> = {
   idle: '',
-  preparing: '准备导出',
+  preparing: '导出中',
   encoding: '导出中',
-  muxing: '封装 MP4',
-  finalizing: '收尾',
+  muxing: '导出中',
+  finalizing: '导出中',
   cancelling: '取消中',
   done: '导出完成',
   cancelled: '导出已取消',

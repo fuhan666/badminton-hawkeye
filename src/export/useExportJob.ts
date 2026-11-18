@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { CourtColor } from '../courtColors'
+import type { CourtPalette } from '../courtColors'
+import type { ExportSettings } from './exportSettings'
+import { REPLAY_DURATION } from '../domain/replay'
 import type { ReplayInput } from '../domain/direction'
 import {
   ExportCancelledError,
@@ -24,18 +26,9 @@ const IDLE: ExportStatus = {
   phase: 'idle',
   percent: 0,
   encodedFrames: 0,
-  totalFrames: 150,
+  totalFrames: 0,
   message: null,
 }
-
-const PHASE_TEXT: Record<ExportPhase, string> = {
-  preparing: '正在准备导出…',
-  encoding: '正在逐帧渲染与编码',
-  muxing: '正在封装 MP4…',
-  finalizing: '正在完成…',
-}
-
-const PREVIEW_UNAFFECTED = '三维预览不受影响。'
 
 function triggerDownload(blob: Blob, filename: string, urls: Set<string>) {
   const url = URL.createObjectURL(blob)
@@ -70,19 +63,20 @@ export function useExportJob() {
     status.phase === 'finalizing' ||
     status.phase === 'cancelling'
 
-  const startExport = useCallback(async (input: ReplayInput, courtColor: CourtColor) => {
+  const startExport = useCallback(async (input: ReplayInput, palette: CourtPalette, settings: ExportSettings) => {
     // 同一时间只允许一个导出任务
     if (controllerRef.current) return
     const runId = runIdRef.current + 1
     runIdRef.current = runId
     const controller = new AbortController()
     controllerRef.current = controller
-    setStatus({ ...IDLE, phase: 'preparing', message: PHASE_TEXT.preparing })
+    setStatus({ ...IDLE, phase: 'preparing', totalFrames: settings.fps * REPLAY_DURATION })
 
     try {
       const result = await exportReplay({
         input,
-        courtColor,
+        palette,
+        settings,
         signal: controller.signal,
         onProgress: (progress) => {
           if (runIdRef.current !== runId) return
@@ -91,7 +85,7 @@ export function useExportJob() {
             percent: progress.percent,
             encodedFrames: progress.encodedFrames,
             totalFrames: progress.totalFrames,
-            message: PHASE_TEXT[progress.phase],
+            message: null,
           })
         },
       })
@@ -102,12 +96,12 @@ export function useExportJob() {
         percent: 100,
         encodedFrames: result.frames,
         totalFrames: result.frames,
-        message: `已导出 ${result.filename}（${result.frames} 帧 / 5.000 s）。`,
+        message: null,
       })
     } catch (error) {
       if (runIdRef.current !== runId) return
       if (error instanceof ExportCancelledError) {
-        setStatus({ ...IDLE, phase: 'cancelled', message: '导出已取消，未生成文件，可重新导出。' })
+        setStatus({ ...IDLE, phase: 'cancelled' })
         return
       }
       if (error instanceof ExportUnsupportedError) {
@@ -118,7 +112,7 @@ export function useExportJob() {
       setStatus({
         ...IDLE,
         phase: 'error',
-        message: `导出失败：${detail}。可重试，${PREVIEW_UNAFFECTED}`,
+        message: detail,
       })
     } finally {
       if (runIdRef.current === runId) controllerRef.current = null
@@ -131,7 +125,7 @@ export function useExportJob() {
     setStatus((current) => ({
       ...current,
       phase: 'cancelling',
-      message: '正在取消导出…',
+      message: null,
     }))
     controller.abort()
   }, [])

@@ -228,6 +228,7 @@ describe('时间越界', () => {
 function projectNdc(
   camera: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number }; fov: number },
   point: { x: number; z: number },
+  aspect = 16 / 9,
 ) {
   const forward = {
     x: camera.target.x - camera.position.x,
@@ -248,7 +249,7 @@ function projectNdc(
   const depth = rel.x * f.x + rel.y * f.y + rel.z * f.z
   const tan = Math.tan((camera.fov * Math.PI) / 360)
   return {
-    x: (rel.x * r.x + rel.z * r.z) / (depth * tan * (16 / 9)),
+    x: (rel.x * r.x + rel.z * r.z) / (depth * tan * aspect),
     y: (rel.x * up.x + rel.y * up.y + rel.z * up.z) / (depth * tan),
   }
 }
@@ -365,7 +366,7 @@ describe('镜头净空', () => {
     { x: -2.4, z: 5.6 },
   ]
 
-  it('镜头全程在地面之上，且不穿过球网', () => {
+  it.each([16 / 9, 9 / 16, 9 / 20, 1, 21 / 9])('%s 画幅：镜头全程在地面之上，且不穿过球网', (aspect) => {
     for (const landing of landings) {
       for (const incoming of [
         { x: landing.x, z: -3.2 },
@@ -374,7 +375,7 @@ describe('镜头净空', () => {
       ]) {
         const replay = input(landing, incoming)
         for (let time = 0; time <= REPLAY_DURATION; time += 0.02) {
-          const p = evaluateReplay(replay, time).camera.position
+          const p = evaluateReplay(replay, time, aspect).camera.position
           expect(p.y).toBeGreaterThan(0.45)
           const inNetBand = p.y > 0.6 && p.y < COURT.netPostHeight + 0.06
           if (inNetBand) {
@@ -384,4 +385,35 @@ describe('镜头净空', () => {
       }
     }
   })
+})
+
+
+describe('横竖画幅构图', () => {
+  for (const aspect of [9 / 16, 9 / 20, 1, 4 / 3, 21 / 9]) {
+    for (const scene of FRAMING_SCENES) {
+      it(`${aspect.toFixed(3)} ${scene.name}：近景落点和参照线始终在画内`, () => {
+        const replay = input(scene.landing, { x: scene.landing.x, z: -3.2 })
+        for (let time = CONTACT_TIME; time <= REPLAY_DURATION; time += 0.04) {
+          const frame = evaluateReplay(replay, time, aspect)
+          for (const point of [scene.landing, ...scene.lines()]) {
+            const ndc = projectNdc(frame.camera, point, aspect)
+            expect(Math.abs(ndc.x)).toBeLessThan(0.98)
+            expect(ndc.y).toBeLessThan(0.98)
+            expect(ndc.y).toBeGreaterThan(-0.95)
+          }
+          expect(frame.ball.position).toEqual(evaluateReplay(replay, time).ball.position)
+        }
+      })
+    }
+    it(`${aspect.toFixed(3)} 全景四角可见`, () => {
+      const frame = evaluateReplay(CROSS_NET, 0, aspect)
+      for (const x of [-COURT.doublesHalfWidth, COURT.doublesHalfWidth]) {
+        for (const z of [-COURT.halfLength, COURT.halfLength]) {
+          const point = projectNdc(frame.camera, { x, z }, aspect)
+          expect(Math.abs(point.x)).toBeLessThan(1)
+          expect(Math.abs(point.y)).toBeLessThan(1)
+        }
+      }
+    })
+  }
 })
